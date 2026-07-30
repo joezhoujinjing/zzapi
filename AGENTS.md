@@ -26,35 +26,51 @@ zzapi auth status                  # 验证凭证
 > 若 `zzapi` 解析到了别的程序，`which zzapi` 查一下 PATH——这个名字在 PyPI
 > 和 npm 上都有同名但无关的项目。
 
-## Skill
+## Skill：随包分发的用法文档
 
-仓库自带 skill，一个业务域一个目录，随 npm 包分发：
+仓库自带面向 agent 的用法文档，一个业务域一个目录，随 npm 包一起分发：
 
 ```
 skills/
   寻源询价/
-    SKILL.md          # 必需，带 frontmatter（name / description）
+    SKILL.md          # 必需，YAML frontmatter（name / description）+ 正文
     scripts/          # 可选，脚本
     reference/        # 可选，长文档；SKILL.md 里链过去，按需加载
 ```
 
-**软链整个目录**（不是单个文件），这样 `scripts/`、`reference/` 一起生效；
-仓库是单一真源，改完即生效：
+**最低要求：直接读就行。** SKILL.md 是自包含的 Markdown，任何 agent 不需要任何
+安装步骤，读 `skills/<业务域>/SKILL.md` 就能正确使用这个 CLI。装了 npm 包的话，
+它在包内同样路径下。
+
+### 挂进宿主的 skill 目录（可选）
+
+若你的 agent 宿主支持「skill / 自定义指令目录」这类机制，把**整个目录**挂进去
+（不是单个文件），`scripts/` 与 `reference/` 才会一起生效。仓库是单一真源，
+用软链而非拷贝，改完即生效：
 
 ```bash
+# 通用形式
+ln -sfn "$(pwd)/skills/寻源询价" <宿主的 skills 目录>/寻源询价
+
+# 例：Claude Code
 ln -sfn "$(pwd)/skills/寻源询价" ~/.claude/skills/寻源询价
 ```
 
-维护时**只改仓库里那份**，不要在 `~/.claude/skills/` 下另存副本，否则两边会分叉。
+不同宿主的目录位置和加载约定各不相同（有的读 frontmatter 做匹配，有的要求在
+配置里显式登记，有的只认 ASCII 名字），照该宿主的文档来。实测 Claude Code 支持
+中文目录名与中文 `name`。
+
+维护时**只改仓库里那份**，不要在宿主目录下另存副本，否则两边会分叉。
 
 ### 加一个新 skill
 
 1. `mkdir -p skills/<业务域>`，写 `SKILL.md`，frontmatter 的 `name` 与目录同名
-2. `description` 要写清**什么时候该用它**——这是 agent 匹配的唯一依据，
-   把用户可能的问法写进去（「XX 现在多少钱」这类），别只写功能名词
-3. 软链进 `~/.claude/skills/`
-4. 内容要精炼：模型自己能推出来的别写，只留推错了会出事的（坑、非常规约定、
+2. `description` 要写清**什么时候该用它**，把用户可能的问法写进去
+   （「XX 现在多少钱」这类），别只写功能名词——做自动匹配的宿主靠它选中 skill，
+   不做匹配的宿主也靠它让人/agent 判断该不该读
+3. 内容要精炼：模型自己能推出来的别写，只留推错了会出事的（坑、非常规约定、
    容易误判的语义）。长内容放 `reference/`，让 SKILL.md 保持可快速通读
+4. 需要的话再挂进宿主的 skill 目录
 
 `skills/` 已在 `package.json` 的 `files` 里，新增目录自动随包分发。
 

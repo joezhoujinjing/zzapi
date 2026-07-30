@@ -30,7 +30,7 @@ src/
   refdata.ts     # 码表查找顺序：用户本地刷新副本 → 随包快照
   ref.ts         # ref sync / ref status（手写，非 registry，见下）
 data/            # 随包分发的静态码表快照，resolver 的燃料兜底
-skills/          # 随包分发的 Claude skill，一个业务域一个目录
+skills/          # 随包分发的 agent 用法文档，一个业务域一个目录
 ```
 
 ### 加一个新接口
