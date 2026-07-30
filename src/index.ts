@@ -6,12 +6,13 @@
  */
 
 import { Command, Option } from 'commander';
-import { getToken } from './auth.js';
+import { getToken, willMintToken } from './auth.js';
 import type { Env } from './config.js';
 import { EXIT, ZzError, localError } from './errors.js';
 import { execute } from './execute.js';
+import { categoryTableExists } from './refdata.js';
 import { aggregateExitCode, splitMulti } from './expand.js';
-import { refStatus, refSync, type SyncItem } from './ref.js';
+import { maybeAutoSync, refStatus, refSync, type SyncItem } from './ref.js';
 import { loadRegistry, flagName, type Endpoint } from './registry.js';
 import { buildEnvelope, renderJson, renderTable, type RenderOptions } from './render.js';
 import { Transport } from './transport.js';
@@ -125,6 +126,8 @@ function buildEndpointCommand(ep: Endpoint): Command {
       }
 
       const transport = new Transport({ env: g.env, timeoutMs, debug: g.debug });
+      // 换 token 时顺带刷码表；非致命，失败不影响本命令
+      await maybeAutoSync({ transport, timeoutMs, env: g.env });
       const result = await execute({ endpoint: ep, transport, inputs, variantFlags, view });
 
       // 单次调用失败 = 普通错误（不是批量），走标准错误出口
@@ -165,7 +168,15 @@ function buildAuthCommand(): Command {
       const mode = resolveOutputMode(g);
       try {
         const timeoutMs = Number(g.timeout);
+        const willMint = willMintToken(g.env);
         const t = await getToken({ env: g.env, timeoutMs });
+        if (willMint || !categoryTableExists()) {
+          await maybeAutoSync({
+            transport: new Transport({ env: g.env, timeoutMs, debug: g.debug }),
+            timeoutMs,
+            env: g.env,
+          });
+        }
         const payload = {
           ok: true,
           env: g.env,

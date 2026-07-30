@@ -9,13 +9,17 @@
  * 契约要求：version 未变则输出 "already up to date, no changes" 且**不下载**。
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import lockfile from 'proper-lockfile';
+import { willMintToken } from './auth.js';
+import type { Env } from './config.js';
 import { localError } from './errors.js';
 import {
   AREA_FILE,
   CATEGORY_FILE,
   atomicWrite,
+  categoryTableExists,
   currentCategoryVersion,
   fileOrigin,
   localDataDir,
@@ -247,4 +251,82 @@ export function refStatus(): SyncItem[] {
       path: resolveDataFile(AREA_FILE),
     },
   ];
+}
+
+// ——————————————————————————————————————————————————————————————
+// 自动同步：跟着「真的去换 token」这个事件走
+// ——————————————————————————————————————————————————————————————
+
+/**
+ * 每次真正向平台换 token 时顺带刷一次码表（token 有 2 小时共享缓存，
+ * 所以实际频率约每 2 小时一次，不是每条命令一次）。
+ * 分类表不随包分发，首次使用时也靠这里自动拉下来。
+ *
+ * 三条硬性质：
+ *   - **非致命**：刷新失败绝不影响本来要跑的命令
+ *   - **加锁 + 二次检查**：并发冷启动时只有一个进程去下载，其余复用
+ *   - **有冷却**：即使反复换 token 也不会频繁打配置接口
+ */
+const AUTOSYNC_COOLDOWN_MS = 60 * 60 * 1000;
+const STAMP_FILE = '.last-autosync';
+
+function stampPath(): string {
+  return join(localDataDir(), STAMP_FILE);
+}
+
+function cooledDown(): boolean {
+  try {
+    const t = Number(readFileSync(stampPath(), 'utf8').trim());
+    return Number.isFinite(t) && Date.now() - t < AUTOSYNC_COOLDOWN_MS;
+  } catch {
+    return false;
+  }
+}
+
+/** 是否该自动刷：码表缺失必刷（忽略冷却），否则只在会换 token 且过了冷却时刷 */
+function shouldAutoSync(env: Env): boolean {
+  if (process.env.ZZAPI_NO_AUTO_SYNC) return false;
+  if (!categoryTableExists()) return true;
+  return willMintToken(env) && !cooledDown();
+}
+
+export async function maybeAutoSync(opts: {
+  transport: Transport;
+  timeoutMs: number;
+  env: Env;
+}): Promise<void> {
+  if (!shouldAutoSync(opts.env)) return;
+
+  mkdirSync(localDataDir(), { recursive: true, mode: 0o700 });
+  const lockTarget = stampPath();
+  if (!existsSync(lockTarget)) {
+    try {
+      writeFileSync(lockTarget, '0', { flag: 'wx' });
+    } catch {
+      /* 竞态下别的进程刚建好 */
+    }
+  }
+
+  let release: (() => Promise<void>) | null = null;
+  try {
+    release = await lockfile.lock(lockTarget, {
+      realpath: false,
+      stale: 60_000,
+      retries: { retries: 8, factor: 1.5, minTimeout: 100, maxTimeout: 2_000 },
+    });
+  } catch {
+    // 抢不到锁说明别的进程正在刷，直接走人
+    return;
+  }
+
+  try {
+    // 二次检查：等锁期间别的进程可能已经刷完了
+    if (!shouldAutoSync(opts.env)) return;
+    await refSync({ transport: opts.transport, timeoutMs: opts.timeoutMs, check: false });
+    atomicWrite(stampPath(), String(Date.now()));
+  } catch {
+    // 非致命：刷不动就用现有的码表，绝不因此让用户的命令失败
+  } finally {
+    await release().catch(() => {});
+  }
 }
