@@ -9,7 +9,7 @@ import { Command, Option } from 'commander';
 import { getToken, willMintToken } from './auth.js';
 import type { Env } from './config.js';
 import { EXIT, ZzError, localError } from './errors.js';
-import { execute } from './execute.js';
+import { execute, executeFanout, type FanoutResult } from './execute.js';
 import { categoryTableExists } from './refdata.js';
 import { aggregateExitCode, splitMulti } from './expand.js';
 import { maybeAutoSync, refStatus, refSync, type SyncItem } from './ref.js';
@@ -23,6 +23,8 @@ interface GlobalOpts {
   json: boolean;
   full: boolean;
   fields?: string;
+  all: boolean;
+  only?: string;
   quiet: boolean;
   env: Env;
   timeout: string;
@@ -54,7 +56,7 @@ function emitError(e: ZzError, json: boolean): never {
 }
 
 function defaultViewName(ep: Endpoint): string | null {
-  const views = ep.result.views;
+  const views = ep.result?.views;
   if (!views) return null;
   const entry = Object.entries(views).find(([, v]) => !v.flag);
   return entry ? entry[0] : null;
@@ -77,15 +79,27 @@ function buildEndpointCommand(ep: Endpoint): Command {
     if (p.resolver) bits.push(`接受码或名称`);
     if (p.multi) bits.push('可逗号分隔多值');
     if (p.max !== undefined) bits.push(`上限 ${p.max}`);
-    if (p.default !== undefined) bits.push(`默认 ${p.default}`);
-    cmd.addOption(new Option(`--${flag} <值>`, bits.join('，')));
+    if (p.type !== 'bool' && p.default !== undefined) bits.push(`默认 ${p.default}`);
+    // bool 是开关，不带值
+    cmd.addOption(
+      p.type === 'bool'
+        ? new Option(`--${flag}`, bits.join('，'))
+        : new Option(`--${flag} <值>`, bits.join('，')),
+    );
   }
 
   for (const v of ep.variants) {
     cmd.addOption(new Option(`--${v.flag}`, v.desc ?? `启用 ${v.flag} 变体`));
   }
 
-  for (const [viewName, view] of Object.entries(ep.result.views ?? {})) {
+  if (ep.fanout) {
+    const cats = [...new Set(ep.fanout.targets.map((t) => t.category))];
+    cmd.addOption(
+      new Option('--only <分类>', `只查这些分类，逗号分隔。可选：${cats.join('、')}`),
+    );
+  }
+
+  for (const [viewName, view] of Object.entries(ep.result?.views ?? {})) {
     if (!view.flag) continue;
     cmd.addOption(new Option(`--${view.flag}`, view.desc ?? `输出 ${viewName} 视图`));
   }
@@ -116,7 +130,7 @@ function buildEndpointCommand(ep: Endpoint): Command {
       );
 
       let view = defaultViewName(ep);
-      for (const [viewName, spec] of Object.entries(ep.result.views ?? {})) {
+      for (const [viewName, spec] of Object.entries(ep.result?.views ?? {})) {
         if (spec.flag && options[camelize(spec.flag)] === true) view = viewName;
       }
 
@@ -128,6 +142,16 @@ function buildEndpointCommand(ep: Endpoint): Command {
       const transport = new Transport({ env: g.env, timeoutMs, debug: g.debug });
       // 换 token 时顺带刷码表；非致命，失败不影响本命令
       await maybeAutoSync({ transport, timeoutMs, env: g.env });
+
+      if (ep.fanout) {
+        const only = g.only ? splitMulti(g.only) : [];
+        const results = await executeFanout({ endpoint: ep, transport, inputs, only });
+        emitFanout(ep, results, g.all, mode.json, {
+          full: g.full,
+          fields: g.fields ? splitMulti(g.fields) : null,
+        });
+      }
+
       const result = await execute({ endpoint: ep, transport, inputs, variantFlags, view });
 
       // 单次调用失败 = 普通错误（不是批量），走标准错误出口
@@ -140,6 +164,7 @@ function buildEndpointCommand(ep: Endpoint): Command {
         fields: g.fields ? splitMulti(g.fields) : null,
         json: mode.json,
         color: mode.color,
+        all: g.all,
       };
       const env = buildEnvelope(ep, result.outcomes, result.metas, result.view, renderOpts);
       const text = mode.json ? renderJson(env) : renderTable(ep, env);
@@ -152,6 +177,140 @@ function buildEndpointCommand(ep: Endpoint): Command {
   });
 
   return cmd;
+}
+
+/**
+ * 扇出结果的输出。
+ *
+ * 默认只列命中项——实测风险命中极稀疏（几十家企业里才有一家），
+ * 逐项打印 17 个空数组全是噪音。但**必须给 summary**，否则用户看到
+ * 空输出会以为没查成功。--all 时连未命中的项也列出来。
+ */
+function emitFanout(
+  ep: Endpoint,
+  results: FanoutResult[],
+  all: boolean,
+  json: boolean,
+  opts: { full: boolean; fields: string[] | null },
+): never {
+  const fan = ep.fanout!;
+  const items: Record<string, unknown>[] = [];
+  const summaries: Record<string, unknown>[] = [];
+  let anyFailed = false;
+  let anyOk = false;
+
+  for (const r of results) {
+    const hit = r.items.filter((i) => i.ok && i.n > 0);
+    const clean = r.items.filter((i) => i.ok && i.n === 0);
+    const failed = r.items.filter((i) => !i.ok);
+    if (failed.length) anyFailed = true;
+    if (failed.length < r.items.length) anyOk = true;
+
+    for (const h of hit) {
+      for (const rec of h.records) {
+        // 默认按该 target 声明的 default_fields 裁剪；--full 无损，--fields 白名单
+        const src = rec && typeof rec === 'object' ? (rec as Record<string, unknown>) : { value: rec };
+        let body: Record<string, unknown>;
+        if (opts.full) {
+          body = { ...src };
+        } else {
+          const want = opts.fields ?? h.fields;
+          body = want.length
+            ? Object.fromEntries(Object.entries(src).filter(([k]) => want.includes(k)))
+            : { ...src };
+        }
+        items.push({
+          ok: true,
+          ...r.coordinate,
+          [fan.tag_category]: h.category,
+          [fan.tag_label]: h.label,
+          ...body,
+        });
+      }
+    }
+    if (all) {
+      for (const c of clean) {
+        items.push({
+          ok: true, ...r.coordinate,
+          [fan.tag_category]: c.category, [fan.tag_label]: c.label, hit: false,
+        });
+      }
+    }
+    for (const f of failed) {
+      items.push({
+        ok: false, ...r.coordinate,
+        [fan.tag_category]: f.category, [fan.tag_label]: f.label,
+        error: f.error!.toShape(),
+      });
+    }
+    summaries.push({
+      ...r.coordinate,
+      checked: r.items.length,
+      hit: hit.length,
+      clean: clean.length,
+      failed: failed.length,
+      hitCategories: [...new Set(hit.map((h) => h.category))],
+    });
+  }
+
+  const env = {
+    items,
+    count: items.length,
+    meta: summaries.length === 1 ? summaries[0] : summaries,
+  };
+
+  const coordKeys = new Set(results.flatMap((r) => Object.keys(r.coordinate)));
+
+  if (json) {
+    process.stdout.write(`${JSON.stringify(env, null, 2)}\n`);
+  } else {
+    const clip = (v: unknown) => {
+      const t = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      return t.length > 160 ? `${t.slice(0, 160)}…` : t;
+    };
+    // 按企业分组输出：多家一起查时，每家的结论要紧跟在自己的表头后面，
+    // 否则「未发现风险记录」会看起来只属于最后一家。
+    results.forEach((r, idx) => {
+      const s = summaries[idx];
+      const name = (r.coordinate as any).companyName ?? '';
+      const code =
+        (r.coordinate as any).socialCreditCode ?? (r.coordinate as any).creditCode ?? '';
+      process.stdout.write(`\n【${name}】${code}\n`);
+      process.stdout.write(
+        `  查询 ${s.checked} 项 · 命中 ${s.hit} 项 · 无记录 ${s.clean} 项` +
+          (Number(s.failed) ? ` · 出错 ${s.failed} 项` : '') +
+          '\n',
+      );
+
+      const mine = items.filter(
+        (it) => it[Object.keys(r.coordinate)[0]] === (r.coordinate as any)[Object.keys(r.coordinate)[0]],
+      );
+      let printed = 0;
+      for (const it of mine) {
+        if (it.ok === false) {
+          process.stdout.write(
+            `  ! [${it[fan.tag_category]}] ${it[fan.tag_label]}: ${(it.error as any).message}\n`,
+          );
+          printed++;
+          continue;
+        }
+        if (it.hit === false) {
+          process.stdout.write(`    [${it[fan.tag_category]}] ${it[fan.tag_label]}: 无记录\n`);
+          continue;
+        }
+        const skip = new Set(['ok', 'hit', fan.tag_category, fan.tag_label, ...coordKeys]);
+        const body = Object.entries(it)
+          .filter(([k, v]) => !skip.has(k) && v != null && v !== '-' && v !== '')
+          .map(([k, v]) => `${k}=${clip(v)}`)
+          .join('\n      ');
+        process.stdout.write(`  ★ [${it[fan.tag_category]}] ${it[fan.tag_label]}\n      ${body}\n`);
+        printed++;
+      }
+      if (!printed) process.stdout.write('  ✓ 未发现风险记录\n');
+    });
+  }
+
+  process.exit(anyFailed ? (anyOk ? EXIT.PARTIAL : EXIT.GENERIC) : EXIT.OK);
 }
 
 function camelize(flag: string): string {
@@ -287,6 +446,7 @@ function main(): void {
     .option('--json', '强制 JSON 输出（非 TTY 时自动开启）', false)
     .option('--full', '无损输出：原样吐出接口全部原始字段', false)
     .option('--fields <字段>', '逗号分隔的字段白名单（坐标字段始终保留）')
+    .option('--all', '不做默认过滤：列出接口返回的全部条目 / 含未命中的扇出项', false)
     .option('--quiet', '只输出数据（非 TTY 时自动开启）', false)
     .addOption(
       new Option('--env <环境>', '目标环境').choices(['prod', 'dev']).default('prod'),

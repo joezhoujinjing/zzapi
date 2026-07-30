@@ -21,14 +21,21 @@ const ParamSpec = z
     positional: z.boolean().default(false),
     /** 接受逗号分隔多值，参与笛卡尔展开 */
     multi: z.boolean().default(false),
-    type: z.enum(['string', 'int']).default('string'),
-    default: z.union([z.string(), z.number()]).optional(),
+    /** bool 走 CLI 布尔开关，发给平台时映射成 1/0 */
+    type: z.enum(['string', 'int', 'bool']).default('string'),
+    default: z.union([z.string(), z.number(), z.boolean()]).optional(),
     min: z.number().optional(),
     max: z.number().optional(),
     /** 引用 resolvers/ 下的 resolver 名，收码也收人话 */
     resolver: z.string().optional(),
     /** 覆盖机械命名规则（pageNum → page、pageSize → limit） */
     flag: z.string().optional(),
+    /**
+     * 发给平台时改用这个字段名。用于平台参数名与 CLI 语义不符的情况：
+     * 企业搜索的入参叫 companyName，但它其实是关键词，而返回行里也有
+     * companyName（匹配到的企业名），同名会让坐标和数据打架。
+     */
+    send_as: z.string().optional(),
     desc: z.string().optional(),
   })
   .strict();
@@ -77,11 +84,65 @@ const ResultSpec = z
     views: z.record(ViewSpec).optional(),
     /** TTY 表格渲染时把哪个数组字段展开成子表 */
     table_focus: z.string().optional(),
+    /**
+     * 默认行过滤，--all 关闭。
+     * 用于「接口返回的东西里，大部分对回答问题没用」的情况：企业搜索前排
+     * 全是没有信用代码的注销企业，不过滤的话默认输出对下一步毫无用处。
+     * 被过滤掉的条数会报在 meta.filtered 里，不静默丢弃。
+     */
+    filter: z
+      .record(
+        z.union([
+          z.array(z.union([z.string(), z.number()])), // 取值白名单
+          z.object({ present: z.boolean() }).strict(), // 字段必须非空
+        ]),
+      )
+      .optional(),
   })
   .strict()
   .refine((r) => (r.list ? 1 : 0) + (r.item ? 1 : 0) === 1, {
     message: 'result 必须且只能声明 list 或 item 之一',
   });
+
+/**
+ * 扇出：一个命令并发打 N 个接口，结果按来源打标后汇总。
+ *
+ * 和 variants 的 prelude（链式：先 A 再 B）不同，这是并发的 N 路。
+ * 用户问的是「这家企业有没有风险」，不是「查一下军队采购失信表」——
+ * 让调用方自己扇出 17 次再拼结果，等于把活推回去。
+ */
+const FanoutTargetSpec = z
+  .object({
+    /** 分类，供 --only 过滤 */
+    category: z.string(),
+    /** 人类可读的项目名，进输出 */
+    label: z.string(),
+    path: z.string(),
+    /** 该接口的 ver，缺省用 endpoint 级 ver */
+    ver: z.number().optional(),
+    /** 平台参数名 → 取自哪个已绑定的值 */
+    params: z.record(z.string()).default({}),
+    /** 结果数组路径 */
+    list: z.string().default('data'),
+    default_fields: z.array(z.string()).default([]),
+  })
+  .strict();
+
+const FanoutSpec = z
+  .object({
+    /** 每条结果上标注来源的字段名 */
+    tag_category: z.string().default('category'),
+    tag_label: z.string().default('riskType'),
+    /**
+     * 一条命令最多体检几个实体。
+     * 扇出不按「总请求数」限制——目标数是 registry 定的，不是用户能控制的维度，
+     * 拿它去卡用户等于让人做除法（17 个目标 → 只能查 2 家）。按实体数限制才
+     * 对得上用户心智：「我要查几家」。
+     */
+    max_entities: z.number().default(10),
+    targets: z.array(FanoutTargetSpec).min(1),
+  })
+  .strict();
 
 const VariantSpec = z
   .object({
@@ -111,17 +172,49 @@ const VariantSpec = z
   })
   .strict();
 
+/**
+ * 归一化前置：把用户给的一个值换成一组命名绑定，供后续调用使用。
+ *
+ * 企业风险要用信用代码调 15 个接口、用企业名调 2 个，而用户手上通常只有其一。
+ * 先打一次「企业基本信息」把两者都拿到，后面才谈得上扇出。
+ */
+const ResolveSpec = z
+  .object({
+    path: z.string(),
+    ver: z.number().optional(),
+    /** 平台参数名 → 主命令参数名；多个候选按顺序试，命中即止 */
+    try_params: z.array(z.record(z.string())).min(1),
+    /** 结果路径；指向数组时取第一条 */
+    list: z.string().default('data'),
+    /** 结果字段 → 绑定名，供 fanout 的 params 引用 */
+    bind: z.record(z.string()),
+    /** 解析失败时的提示 */
+    hint: z.string().optional(),
+  })
+  .strict();
+
 const EndpointSpec = z
   .object({
     noun: z.string(),
     verb: z.string(),
-    path: z.string(),
+    /** 单接口命令用 path；扇出命令用 fanout，二选一 */
+    path: z.string().optional(),
+    /** 该接口的 ver，缺省 1。行政处罚 v2 之类需要覆盖 */
+    ver: z.number().optional(),
     summary: z.string().optional(),
     params: z.record(ParamSpec).default({}),
-    result: ResultSpec,
+    result: ResultSpec.optional(),
     variants: z.array(VariantSpec).default([]),
+    resolve: ResolveSpec.optional(),
+    fanout: FanoutSpec.optional(),
   })
-  .strict();
+  .strict()
+  .refine((e) => (e.path ? 1 : 0) + (e.fanout ? 1 : 0) === 1, {
+    message: 'endpoint 必须且只能声明 path 或 fanout 之一',
+  })
+  .refine((e) => !!e.fanout || !!e.result, {
+    message: '单接口 endpoint 必须声明 result',
+  });
 
 const ModuleSpec = z
   .object({
@@ -135,6 +228,9 @@ export type ViewSpec = z.infer<typeof ViewSpec>;
 export type TransformSpec = z.infer<typeof TransformSpec>;
 export type ResultSpec = z.infer<typeof ResultSpec>;
 export type VariantSpec = z.infer<typeof VariantSpec>;
+export type FanoutSpec = z.infer<typeof FanoutSpec>;
+export type FanoutTargetSpec = z.infer<typeof FanoutTargetSpec>;
+export type ResolveSpec = z.infer<typeof ResolveSpec>;
 export type EndpointSpec = z.infer<typeof EndpointSpec>;
 
 export interface Endpoint extends EndpointSpec {
@@ -170,11 +266,36 @@ function validateEndpoint(ep: Endpoint): void {
     if (!p.resolver) continue;
     for (const f of getResolver(p.resolver).labelFields) contributed.add(f);
   }
-  for (const c of ep.result.coordinate) {
+  for (const c of ep.result?.coordinate ?? []) {
     if (!contributed.has(c)) {
       throw new Error(
         `${where}: coordinate 声明了 "${c}"，但它既不是参数名也不是任何 resolver 贡献的标签`,
       );
+    }
+  }
+  if (ep.fanout) {
+    const bound = new Set([...Object.keys(ep.params), ...Object.values(ep.resolve?.bind ?? {})]);
+    const cats = new Set<string>();
+    for (const t of ep.fanout.targets) {
+      cats.add(t.category);
+      for (const [apiParam, source] of Object.entries(t.params)) {
+        if (!bound.has(source)) {
+          throw new Error(
+            `${where}: fanout 目标「${t.label}」的 ${apiParam} 取自 "${source}"，` +
+              `但它既不是参数名也不是 resolve.bind 产出的绑定名`,
+          );
+        }
+      }
+    }
+    if (!cats.size) throw new Error(`${where}: fanout 没有任何 category`);
+  }
+  if (ep.resolve) {
+    for (const attempt of ep.resolve.try_params) {
+      for (const src of Object.values(attempt)) {
+        if (!ep.params[src]) {
+          throw new Error(`${where}: resolve 引用了不存在的参数 ${src}`);
+        }
+      }
     }
   }
   for (const v of ep.variants) {

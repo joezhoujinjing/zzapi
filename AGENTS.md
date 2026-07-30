@@ -32,10 +32,12 @@ zzapi auth status                  # 验证凭证
 
 ```
 skills/
-  寻源询价/
+  寻源询价/            # 商品价格、比价、趋势、供应商名录
     SKILL.md          # 必需，YAML frontmatter（name / description）+ 正文
     scripts/          # 可选，脚本
     reference/        # 可选，长文档；SKILL.md 里链过去，按需加载
+  供应商风险查询/        # 企业失信与黑名单 17 项体检
+    SKILL.md
 ```
 
 **最低要求：直接读就行。** SKILL.md 是自包含的 Markdown，任何 agent 不需要任何
@@ -54,6 +56,7 @@ ln -sfn "$(pwd)/skills/寻源询价" <宿主的 skills 目录>/寻源询价
 
 # 例：Claude Code
 ln -sfn "$(pwd)/skills/寻源询价" ~/.claude/skills/寻源询价
+ln -sfn "$(pwd)/skills/供应商风险查询" ~/.claude/skills/供应商风险查询
 ```
 
 不同宿主的目录位置和加载约定各不相同（有的读 frontmatter 做匹配，有的要求在
@@ -93,6 +96,27 @@ HTTP 用原生 `fetch`。**加依赖前先确认真的绕不过去。**
 `goods search` / `quote --area 上海,全国`（两地价格必须不同）/ `quote --by-area`
 / `trend` / `source` / 批量部分失败 exit 6 / 不存在的 goodsCode exit 4。
 
+## registry 的能力清单
+
+写 YAML 前先看有没有现成能力，别急着改 TS：
+
+| 能力 | 用途 |
+|---|---|
+| `path` + `result` | 单接口命令 |
+| `result.list` / `item` | 一次调用出多条 / 一条 |
+| `result.coordinate` | 每行必带的坐标，`--fields` 裁不掉 |
+| `result.default_fields` | 默认输出字段（必须人工标注） |
+| `result.filter` | 默认行过滤，`--all` 关闭，`meta.filtered` 报计数 |
+| `result.views` | 一个结果多套视图（月/周序列） |
+| `result.transforms` | 值映射（类型码 → 人话） |
+| `variants[].prelude` | 链式：先调 A 拿值再喂给 B（`--by-area`） |
+| `fanout` | 并发扇出 N 个接口 + 按来源打标 + `--only` 分类过滤 |
+| `resolve` | 一个输入 → 一组命名绑定，`try_params` 按序试 |
+| `ver` | per-endpoint 版本覆盖 |
+| 参数 `type: bool` | CLI 开关 → 平台的 1/0 |
+| 参数 `send_as` | 平台参数名与 CLI 语义不符时改名 |
+| 参数 `resolver` | 引用 resolvers/（地区、分类） |
+
 ## 加一个新接口：只写 YAML
 
 命令树、`--help`、参数校验、类型转换、resolver、默认字段全部从
@@ -130,7 +154,9 @@ endpoints:
 - **50 上限管的是展开后的总请求数**，不是逗号里的值个数
 - **坐标字段不可被 `--fields` 裁掉**。多值展开后不带坐标的数组无法解读
 - **`--full` 必须无损**，原样吐全部原始字段、不做任何加工。它是唯一的保真出口
-- **`ver` 恒为 `"1"`**，传输层注入，不暴露给用户（写 `"1.0"` 会报 1601008）
+- **`ver` 由传输层注入**，默认 1，registry 可 per-endpoint 覆盖（写 `"1.0"` 会报 1601008）
+- **平台有调用频次限制**（`1601012` → exit 8）。17 路扇出很容易撞上，
+  压测或批量体检时要退避重试，别急着重跑
 - 退出码语义：`0` 成功（含空结果）/ `2` 参数 / `4` 未找到 / `6` 部分失败 /
   `7` 鉴权 / `8` 限流 / `9` 网络
 
