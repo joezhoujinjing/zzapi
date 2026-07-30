@@ -1,0 +1,164 @@
+# 商品寻源询价（price-track）
+#
+# 一个接口 = 一段声明。新增接口只加 YAML，不改 TS。
+#
+# 参数命名机械规则：凡是「码」，CLI 去掉 Code/Id 后缀（areaCode → --area，
+# categoryId → --category）；pageNum/pageSize 用 flag 显式覆写成 --page/--limit。
+# ver 不出现在这里——恒为 "1"，由传输层注入。
+#
+# areaCode 的 default: "0" 已实测与「不传」完全等价（全国），
+# 写出来是为了让每一项输出都带上完整坐标。
+
+module: price-track
+
+endpoints:
+  # ——————————————————————————————————————————————————————————
+  - noun: goods
+    verb: search
+    path: /openapi/price-track/average-price-search
+    summary: 按关键词搜商品，拿到 goodsCode（其他命令的钥匙）
+    params:
+      keyword:
+        required: true
+        positional: true
+        multi: true
+        desc: 检索关键词
+      areaCode:
+        resolver: area
+        multi: true
+        default: "0"
+        desc: 地区
+      categoryId:
+        resolver: category
+        multi: true
+        desc: 分类
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 50
+        desc: 每页条数
+    result:
+      list: data.goodsList
+      coordinate: [keyword, areaCode, areaName, categoryId, categoryName]
+      default_fields: [goodsName, avgPrice, unit, goodsCode]
+
+  # ——————————————————————————————————————————————————————————
+  - noun: goods
+    verb: quote
+    path: /openapi/price-track/price-info
+    summary: 查商品当前参考价（5 个时间窗就是答案本身，默认全给）
+    params:
+      goodsCode:
+        required: true
+        positional: true
+        multi: true
+        desc: 商品编码
+      areaCode:
+        resolver: area
+        multi: true
+        default: "0"
+        desc: 地区
+    result:
+      item: data
+      coordinate: [goodsCode, areaCode, areaName]
+      default_fields: [goodsName, unit, avgPrice, lastPublishTime, categoryId, priceInfo]
+      table_focus: priceInfo
+      transforms:
+        # 时间窗类型码由 timeRange 反推得出，见 docs/cneptp_api_研究笔记.md
+        - path: priceInfo[].type
+          as: window
+          map:
+            "5": 近一周
+            "1": 上个自然月
+            "2": 近一季度
+            "3": 近半年
+            "4": 近一年
+    variants:
+      - flag: by-area
+        desc: 先查该商品的有价地区（省级），再逐地区取价，直接给跨地区比价
+        prelude:
+          path: /openapi/price-track/goods-area-data
+          params:
+            goodsCode: goodsCode
+          list: data
+          # 只取全国 + 省级：市级有上百个，展开后必超 50 次调用上限
+          filter:
+            areaLevel: [0, 1]
+          feed:
+            param: areaCode
+            value: areaCode
+
+  # ——————————————————————————————————————————————————————————
+  - noun: goods
+    verb: trend
+    path: /openapi/price-track/goods-history-price
+    summary: 历史价格曲线（固定近一年，接口不支持自定义时间范围）
+    params:
+      goodsCode:
+        required: true
+        positional: true
+        multi: true
+        desc: 商品编码
+      areaCode:
+        resolver: area
+        multi: true
+        default: "0"
+        desc: 地区
+    result:
+      item: data
+      coordinate: [goodsCode, areaCode, areaName]
+      default_fields: [goodsName, unit]
+      views:
+        month:
+          series: monthPriceHistory
+          fields: [monthDate, price]
+          summary: { value: price, label: monthDate }
+        week:
+          flag: week
+          desc: 输出周粒度序列（约 46 周）而非月度
+          series: weekPriceHistory
+          fields: [weekDate, price]
+          summary: { value: price, label: weekDate }
+
+  # ——————————————————————————————————————————————————————————
+  - noun: goods
+    verb: source
+    path: /openapi/price-track/goods-supplier
+    summary: 寻源——列出该商品的供应商
+    params:
+      goodsCode:
+        required: true
+        positional: true
+        multi: true
+        desc: 商品编码
+      areaCode:
+        resolver: area
+        multi: true
+        default: "0"
+        desc: 地区（省级过滤有效）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 10
+        min: 1
+        max: 50
+        desc: 每页条数
+    result:
+      list: data.supplierList
+      coordinate: [goodsCode, areaCode, areaName]
+      default_fields: [companyName, creditCode, phone, registeredCapital]
+      meta: [total, pageNum, pageSize]

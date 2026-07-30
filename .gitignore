@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Credentials & local state — must never be committed
+.env
+.env.*
+config.toml
+*.token.json
+token.json
+.cache/
+
+# OS
+.DS_Store
