@@ -114,6 +114,13 @@ const PLATFORM_CODES: Record<string, Mapping> = {
   },
 
   // —— 未找到 (exit 4) ——
+  '1205009': {
+    // trend / goods-area-data 用这个码，price-info 用 1205004，同一件事两个码
+    code: 'GOODS_NOT_FOUND',
+    exit: EXIT.NOT_FOUND,
+    retryable: false,
+    hint: '用 zzapi goods search <关键词> 获取有效的 goodsCode',
+  },
   '1205004': {
     code: 'GOODS_NOT_FOUND',
     exit: EXIT.NOT_FOUND,
