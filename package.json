@@ -1,5 +1,5 @@
 {
-  "name": "zzapi",
+  "name": "@joezhoujinjing/zzapi",
   "version": "0.1.0",
   "description": "中资（cneptp）寻源询价 OpenAPI 命令行客户端",
   "type": "module",
@@ -32,5 +32,25 @@
     "typescript": "^5.5.4"
   },
   "license": "UNLICENSED",
-  "private": true
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "cneptp",
+    "中资",
+    "寻源",
+    "询价",
+    "采购",
+    "大宗商品",
+    "价格",
+    "openapi",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joezhoujinjing/zzapi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/joezhoujinjing/zzapi/issues"
+  }
 }
