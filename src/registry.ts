@@ -133,6 +133,13 @@ const FanoutSpec = z
     /** 每条结果上标注来源的字段名 */
     tag_category: z.string().default('category'),
     tag_label: z.string().default('riskType'),
+    /**
+     * 一条命令最多体检几个实体。
+     * 扇出不按「总请求数」限制——目标数是 registry 定的，不是用户能控制的维度，
+     * 拿它去卡用户等于让人做除法（17 个目标 → 只能查 2 家）。按实体数限制才
+     * 对得上用户心智：「我要查几家」。
+     */
+    max_entities: z.number().default(10),
     targets: z.array(FanoutTargetSpec).min(1),
   })
   .strict();

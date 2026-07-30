@@ -410,11 +410,16 @@ export async function executeFanout(input: FanoutInput): Promise<FanoutResult[]>
     ? fan.targets.filter((t) => input.only.includes(t.category))
     : fan.targets;
 
-  // 上限管的是展开后的总请求数，扇出也不例外
-  assertWithinLimit(combos.length * targets.length, [
-    ...axes,
-    { param: `扇出目标`, values: new Array(targets.length) },
-  ]);
+  // 扇出按实体数限制，不按总请求数（见 FanoutSpec.max_entities 的说明）
+  if (combos.length > fan.max_entities) {
+    throw localError(
+      'VALIDATION',
+      'TOO_MANY_ENTITIES',
+      `一次最多体检 ${fan.max_entities} 个，收到 ${combos.length} 个`,
+      `分批执行；每个实体会产生 ${targets.length} 次调用，` +
+        `用 --only 缩小范围可以降低总调用量`,
+    );
+  }
 
   const out: FanoutResult[] = [];
   for (const combo of combos) {
