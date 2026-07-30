@@ -26,7 +26,9 @@ src/
   errors.ts      # 平台码 → 符号 + 退出码 + hint（纯数据表）
   expand.ts      # 逗号解析（含 \, 转义）、50 上限、退出码聚合
   resolvers/     # area（省级优先歧义策略）、category（CSV 索引）
-data/            # 随包分发的静态码表，resolver 的燃料
+  refdata.ts     # 码表查找顺序：用户本地刷新副本 → 随包快照
+  ref.ts         # ref sync / ref status（手写，非 registry，见下）
+data/            # 随包分发的静态码表快照，resolver 的燃料兜底
 ```
 
 ### 加一个新接口
@@ -54,6 +56,23 @@ endpoints:
 
 `registry/` 是运行时读取的，改完 YAML 不需要重新编译。
 
+### 码表的两处来源
+
+```
+~/.cache/zzapi/data/   ← zzapi ref sync 写这里，优先生效
+<pkg>/data/            ← 随包快照，只读兜底
+```
+
+刷新出来的数据落在用户目录，**不进 git、不污染安装包**；本地副本被清掉也只是
+退回包内快照，不会坏。`zzapi ref status` 看当前每张表从哪来。
+
+`ref sync` 和 `auth status` 一样是**手写命令，不走 registry**——它做的是版本比对 +
+下载 CSV + 原子落盘，不是「调接口拿一组记录再裁剪」。registry 只描述查询型接口；
+把这类流程硬塞进去只会把 schema 撑成通用编程语言。
+
+分类表靠平台返回的 `version` 比对；地区表接口不返版本号，只能整表算 sha256 比对。
+两者都是「没变就不下载」。
+
 ### 几个不显然的约束
 
 - **token 必须是跨进程文件锁共享缓存**。平台限制同时最多 2 个有效 token；
@@ -74,8 +93,7 @@ ZZAPI_APP_KEY=... ZZAPI_APP_SECRET=... node dist/index.js auth status
 
 ## 尚未覆盖
 
-- `ref` 命令组（`ref areas` / `ref categories` / `ref sync`）与随之而来的码表
-  在线同步。当前 `data/` 下两份码表是随包分发的静态快照
+- `ref areas` / `ref categories`（查看码表内容）。`ref sync` / `ref status` 已实现
 - `price-track/mall/` 下 11 个 SKU 接口、企业风险等其余模块
   （见 `docs/00-route-inventory.txt`，全平台 535 条路由）
 - 限流码未知，`errors.ts` 里 exit 8 的映射待真实触发后补

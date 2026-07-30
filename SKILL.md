@@ -94,5 +94,5 @@ zzapi goods quote <c1>,<c2> | jq '.items[] | select(.ok)'
   （坐标字段裁不掉）
 - 大宗商品（钢铁建材）返回**品类级均价**，MRO/办公用品返回**具体 SKU 参考价**，
   口径和单位不同，不要混着比
-
-<!-- 安装：仓库是私有的，npm 上没有这个包。从 checkout 里执行 npm i -g . -->
+- 地区/分类码表是随包快照。`--area` / `--category` 认不出某个新地区或新分类时，跑
+  `zzapi ref sync` 刷新（没变则不下载，落到 `~/.cache/zzapi/data/`，不动安装包）

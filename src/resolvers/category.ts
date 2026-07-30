@@ -7,9 +7,10 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { localError } from '../errors.js';
-import { dataDir, type Resolved, type Resolver } from './index.js';
+import { CATEGORY_FILE, resolveDataFile } from '../refdata.js';
+import { type Resolved, type Resolver } from './index.js';
 
 interface CategoryRow {
   id: string;
@@ -26,22 +27,18 @@ interface Index {
 
 let index: Index | null = null;
 
-/** 码表版本号记在 data/sources.json 里（不再编进文件名），ref sync 将来靠它跟平台比对。 */
-const CSV_NAME = 'goods-category.csv';
-
 function csvFile(): string {
-  const dir = dataDir();
-  const exact = join(dir, CSV_NAME);
+  const exact = resolveDataFile(CATEGORY_FILE);
   if (existsSync(exact)) return exact;
-  // 兼容旧的带版本号文件名（goods_category_v<version>.csv），
-  // 以及将来 ref sync 下载下来还没改名的情况
+  // 兼容带版本号的旧文件名（ref sync 从 downloadPath 拉下来的原名就是这种）
+  const dir = dirname(exact);
   const legacy = readdirSync(dir).find((f) => /^goods_category_v\d+\.csv$/.test(f));
   if (legacy) return join(dir, legacy);
   throw localError(
     'GENERIC',
     'CATEGORY_TABLE_MISSING',
-    `${dir} 下找不到 ${CSV_NAME}`,
-    '重新安装 zzapi，或确认包内 data/ 完整',
+    `${dir} 下找不到 ${CATEGORY_FILE}`,
+    '跑 zzapi ref sync 重新拉取，或重新安装 zzapi',
   );
 }
 

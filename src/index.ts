@@ -11,6 +11,7 @@ import type { Env } from './config.js';
 import { EXIT, ZzError, localError } from './errors.js';
 import { execute } from './execute.js';
 import { aggregateExitCode, splitMulti } from './expand.js';
+import { refStatus, refSync, type SyncItem } from './ref.js';
 import { loadRegistry, flagName, type Endpoint } from './registry.js';
 import { buildEnvelope, renderJson, renderTable, type RenderOptions } from './render.js';
 import { Transport } from './transport.js';
@@ -195,6 +196,79 @@ function buildAuthCommand(): Command {
   return auth;
 }
 
+/**
+ * `ref` 命令组：码表的刷新与状态。手写而非 registry——
+ * 它做的是版本比对 + 下载 + 落盘，不是「调接口拿一组记录」，
+ * 塞进 registry 只会把 schema 撑成通用编程语言。
+ */
+function buildRefCommand(): Command {
+  const ref = new Command('ref').description('地区 / 分类码表');
+
+  ref
+    .command('sync')
+    .description('从平台刷新码表到本地（version 未变则不下载）')
+    .option('--check', '只比对版本，不下载', false)
+    .action(async (opts: { check: boolean }, command: Command) => {
+      const g = command.optsWithGlobals() as unknown as GlobalOpts;
+      const mode = resolveOutputMode(g);
+      try {
+        const timeoutMs = Number(g.timeout);
+        const transport = new Transport({ env: g.env, timeoutMs, debug: g.debug });
+        const items = await refSync({ transport, timeoutMs, check: opts.check });
+        emitRefItems(items, mode.json, opts.check);
+      } catch (e) {
+        if (e instanceof ZzError) emitError(e, mode.json);
+        throw e;
+      }
+    });
+
+  ref
+    .command('status')
+    .description('看两张码表当前从哪来、什么版本')
+    .action(async (_o: unknown, command: Command) => {
+      const g = command.optsWithGlobals() as unknown as GlobalOpts;
+      emitRefItems(refStatus(), resolveOutputMode(g).json, false);
+    });
+
+  return ref;
+}
+
+function emitRefItems(items: SyncItem[], json: boolean, check: boolean): never {
+  if (json) {
+    process.stdout.write(`${JSON.stringify({ items, count: items.length }, null, 2)}\n`);
+  } else {
+    for (const i of items) {
+      if (!i.ok) {
+        const e = i.error as any;
+        process.stdout.write(`✗ ${i.table}: ${e?.code} ${e?.message}\n`);
+        if (e?.hint) process.stdout.write(`    → ${e.hint}\n`);
+        continue;
+      }
+      if (i.status === 'current') {
+        process.stdout.write(
+          `  ${i.table}: ${i.to ? `version ${i.to} ` : ''}[${i.origin}]\n    ${i.path}\n`,
+        );
+      } else if (i.status === 'unchanged') {
+        process.stdout.write(
+          `✓ ${i.table}: already up to date, no changes` +
+            `${i.to ? ` (version ${i.to})` : ''}${i.origin ? ` [${i.origin}]` : ''}\n`,
+        );
+      } else if (i.status === 'available') {
+        process.stdout.write(`↑ ${i.table}: 有新版本可用 ${i.from ?? '—'} → ${i.to ?? '—'}（--check 未下载）\n`);
+      } else {
+        process.stdout.write(
+          `↓ ${i.table}: 已更新 ${i.from ?? '—'} → ${i.to ?? '—'}` +
+            `${i.rows ? `，${i.rows} 条` : ''}\n    ${i.path}\n`,
+        );
+      }
+    }
+  }
+  const failed = items.filter((i) => !i.ok);
+  process.exit(
+    failed.length === 0 ? EXIT.OK : failed.length < items.length ? EXIT.PARTIAL : EXIT.GENERIC,
+  );
+}
+
 function main(): void {
   const program = new Command('zzapi')
     .version(VERSION)
@@ -231,7 +305,15 @@ function main(): void {
     group.addCommand(buildEndpointCommand(ep));
   }
 
-  program.addCommand(buildAuthCommand());
+  // 手写命令组：若 registry 里已有同名 noun，就把子命令挂进那个组，不另起一个
+  for (const built of [buildRefCommand(), buildAuthCommand()]) {
+    const existing = nouns.get(built.name());
+    if (existing) {
+      for (const sub of built.commands) existing.addCommand(sub);
+    } else {
+      program.addCommand(built);
+    }
+  }
 
   program.parseAsync(process.argv).catch((e) => {
     if (e instanceof ZzError) {
