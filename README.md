@@ -109,5 +109,5 @@ ZZAPI_APP_KEY=... ZZAPI_APP_SECRET=... node dist/index.js auth status
 
 - `ref areas` / `ref categories`（查看码表内容）。`ref sync` / `ref status` 已实现
 - `price-track/mall/` 下 11 个 SKU 接口、企业风险等其余模块
-  （见 `docs/00-route-inventory.txt`，全平台 535 条路由）
+  （全平台共 535 条文档化路由）
 - 限流码未知，`errors.ts` 里 exit 8 的映射待真实触发后补

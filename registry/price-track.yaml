@@ -72,7 +72,7 @@ endpoints:
       default_fields: [goodsName, unit, avgPrice, lastPublishTime, categoryId, priceInfo]
       table_focus: priceInfo
       transforms:
-        # 时间窗类型码由 timeRange 反推得出，见 docs/cneptp_api_研究笔记.md
+        # 时间窗类型码由各档 timeRange 的起止日期反推得出
         - path: priceInfo[].type
           as: window
           map:
