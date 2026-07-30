@@ -221,3 +221,17 @@ export async function getToken(opts: GetTokenOptions): Promise<TokenStatus> {
     await release().catch(() => {});
   }
 }
+
+/**
+ * 本次调用会不会真的去平台换 token（即缓存里没有可用 token）。
+ * 无副作用，只读缓存——用来决定要不要顺带刷一次码表。
+ */
+export function willMintToken(env: Env): boolean {
+  try {
+    const cred = loadCredentials(env);
+    return !isFresh(readCache(tokenFile(env, cred.appKey)));
+  } catch {
+    // 连凭证都没有，轮不到刷码表
+    return false;
+  }
+}

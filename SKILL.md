@@ -94,5 +94,5 @@ zzapi goods quote <c1>,<c2> | jq '.items[] | select(.ok)'
   （坐标字段裁不掉）
 - 大宗商品（钢铁建材）返回**品类级均价**，MRO/办公用品返回**具体 SKU 参考价**，
   口径和单位不同，不要混着比
-- 地区/分类码表是随包快照。`--area` / `--category` 认不出某个新地区或新分类时，跑
-  `zzapi ref sync` 刷新（没变则不下载，落到 `~/.cache/zzapi/data/`，不动安装包）
+- 码表会在换 token 时自动刷新（约每 2 小时一次），通常不用管。`--area` / `--category`
+  认不出某个新地区或新分类时，手动跑 `zzapi ref sync` 立刻刷一次

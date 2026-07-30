@@ -9,7 +9,14 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cacheDir } from './config.js';
@@ -74,11 +81,27 @@ export function readSources(): Sources {
 
 /** 当前生效的 category 版本号（本地刷新过就是本地的） */
 export function currentCategoryVersion(): string | null {
+  // 版本号只有在表文件真实存在时才算数。否则会出现这种死锁：
+  // 文件没了但 sources.json 还留着版本号 → sync 判定「已是最新」→ 永远不下载。
+  if (!categoryTableExists()) return null;
   const local = readJson(join(localDataDir(), SOURCES_FILE));
   if (fileOrigin(CATEGORY_FILE) === 'local' && local?.category?.version) {
     return local.category.version;
   }
   return readJson(join(packagedDataDir(), SOURCES_FILE))?.category?.version ?? null;
+}
+
+/** 分类表在本地或包内是否真实可用（带版本号的旧文件名也算） */
+export function categoryTableExists(): boolean {
+  for (const dir of [localDataDir(), packagedDataDir()]) {
+    if (existsSync(join(dir, CATEGORY_FILE))) return true;
+    try {
+      if (readdirSync(dir).some((f) => /^goods_category_v\d+\.csv$/.test(f))) return true;
+    } catch {
+      /* 目录不存在 */
+    }
+  }
+  return false;
 }
 
 export function writeLocalSources(patch: Sources): void {
