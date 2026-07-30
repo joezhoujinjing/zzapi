@@ -1,87 +1,98 @@
 ---
 name: zzapi
-description: 中资（cneptp）寻源询价 OpenAPI 命令行客户端。查商品参考价、历史价格曲线、跨地区比价、供应商名录。当需要查询大宗商品/MRO/办公用品的市场参考价、做跨地区比价、或找某商品的供应商时使用。
+description: 查中资（cneptp）平台的商品市场参考价、历史价格趋势、跨地区比价、供应商名录。当需要询价、比价、看价格走势、找某商品的供应商，或问「XX 现在多少钱」「哪个地区便宜」「最近涨了还是跌了」「谁在供货」时使用。覆盖钢铁建材等大宗商品、MRO 工具、办公用品。
 ---
 
 # zzapi
 
-中资开放平台「商品寻源询价」的 CLI。平台 HTTP 状态码恒为 200、成败藏在 body 里，
-这个工具把它翻译成正常的退出码与结构化错误，脚本和 agent 可以直接判。
+命令行工具 `zzapi` 已全局安装。凭证走 `ZZAPI_APP_KEY` / `ZZAPI_APP_SECRET` 环境变量
+（或 `~/.config/zzapi/config.toml`），不接受命令行传入。`zzapi auth status` 可验证。
 
-## 装与认证
+## 一切从 goodsCode 开始
 
-```bash
-npm i -g zzapi          # 或 npx zzapi ...
-export ZZAPI_APP_KEY=...
-export ZZAPI_APP_SECRET=...
-zzapi auth status       # 验证凭证，看 token 剩余时间
-```
-
-凭证也可放 `~/.config/zzapi/config.toml`（`app_key` / `app_secret` 两行）。
-**不接受命令行 flag**——会进 shell history 和 ps。
-
-## 五个命令
+**除 `search` 外所有命令都需要 goodsCode，而它只能从 `search` 拿到。** 固定两步：
 
 ```bash
-# 1. 搜商品，拿 goodsCode（其他命令的钥匙）
-zzapi goods search 螺纹钢 --json
-zzapi goods search 螺纹钢 --json | jq -r '.items[0].goodsCode'
-
-# 2. 当前参考价：5 个时间窗（近一周/上月/近一季/近半年/近一年）
-zzapi goods quote 000000000006AD44B --json
-
-# 3. 跨地区比价：--area 收码也收人话，逗号分隔多值
-zzapi goods quote 000000000006AD44B --area 上海,北京,全国 --json
-zzapi goods quote 000000000006AD44B --by-area --json   # 自动展开全部有价省份
-
-# 4. 历史曲线：默认 12 个月度点 + 摘要（min/max/avg/涨跌）
-zzapi goods trend 000000000006AD44B --json
-zzapi goods trend 000000000006AD44B --week --json      # 改成 46 个周点
-
-# 5. 寻源：供应商名录（公司名/信用代码/电话/注册资本）
-zzapi goods source 000000000006AD44B --area 湖南 --limit 20 --json
+zzapi goods search 螺纹钢                # → items[].goodsCode
+zzapi goods quote 000000000006AD44B     # 用上一步拿到的 code
 ```
 
-输出恒为 `{"items":[...],"count":N}`。每项自带完整坐标（`goodsCode` + `areaCode`
-+ `areaName`，搜索则含 `keyword`），多值展开后不会分不清哪条对应哪个地区。
+搜索是**模糊匹配**：关键词没命中时会返回不相关的商品，而不是空结果。用之前先核对
+`goodsName` 是不是想要的东西。
 
-管道/非 TTY 下自动开 `--json`，所以 `| jq` 时不用写 `--json`。
+管道/非 TTY 下自动输出 JSON，不必加 `--json`。
 
-## 输出裁剪
+## 典型任务
 
-默认只给「回答问题所需」的字段。要别的：
-
-- `--fields goodsName,avgPrice` —— 白名单（坐标字段永远保留，裁不掉）
-- `--full` —— 无损，原样吐接口全部原始字段。想看 `props`/`marketMinPrice`
-  这类默认不给的字段就用它
-
-## 三个常见报错怎么救
-
-| 报错 | 退出码 | 怎么救 |
-|---|---|---|
-| `GOODS_NOT_FOUND` | 4 | goodsCode 不存在或写错。先 `zzapi goods search <关键词>` 拿有效编码 |
-| `OUT_OF_RANGE` / `TOO_MANY_REQUESTS` | 2 | `--limit` 上限 50；逗号多值展开后的**总调用数**也不能超 50。拆成几批跑 |
-| `CREDENTIALS_MISSING` / `AUTH_*` | 7 | 没设 `ZZAPI_APP_KEY`/`ZZAPI_APP_SECRET`，或该 appKey 没开通此接口 |
-
-退出码：`0` 成功（含空结果）、`2` 参数错、`4` 未找到、`6` 批量部分失败、
-`7` 鉴权、`8` 限流、`9` 网络。
-
-**部分失败（6）**：批量查多个 goodsCode 时，失败项不会中断其他项。每项都有
-`ok` 布尔，失败项带 `error`：
+**现在多少钱** —— 一次给 5 个时间窗（近一周 / 上月 / 近一季 / 近半年 / 近一年），
+足够回答「是贵了还是便宜了」：
 
 ```bash
-zzapi goods quote BADCODE,000000000006AD44B --json; echo $?   # → 6
-# items[0] = {"ok":false, "goodsCode":"BADCODE", ..., "error":{...}}
-# items[1] = {"ok":true,  "goodsCode":"000000000006AD44B", ...}
+zzapi goods quote <code>
 ```
 
-脚本里这样过滤：`jq '.items[] | select(.ok)'`。
+**哪个地区便宜** —— `--area` 收地名也收编码：
 
-## 注意
+```bash
+zzapi goods quote <code> --area 上海,广东,全国   # 指定几个地区
+zzapi goods quote <code> --by-area              # 全部有价省份，一次比完
+```
 
-- **地区同名取省级**：`--area 北京` 命中 `110000`（省级）而非 `110100`（市级）。
-  输出坐标会回显实际生效的 `areaCode`，要精确指定就直接传码
-- 历史价格固定返回近一年，接口不支持自定义时间范围
-- 逗号是多值分隔符，关键词里的字面逗号写 `\,`
-- 并发安全：多个 zzapi 进程共用一个 token（文件锁共享缓存），
-  平台的 2-token 上限不会被顶掉
+**涨还是跌** —— 默认 12 个月度点 + 摘要（min/max/avg/涨跌幅），摘要通常就够回答：
+
+```bash
+zzapi goods trend <code>
+zzapi goods trend <code> --week    # 要更细则给 46 个周点
+```
+
+固定返回近一年，接口不支持自定义时间范围，不用试 `--start` / `--end`。
+
+**谁在供货** ——
+
+```bash
+zzapi goods source <code> --area 湖南 --limit 20
+```
+
+`meta.total` 在全国查询时恒为 10000（封顶值，不是真实数量）；按省过滤后的 total 才可信。
+
+## 批量：用逗号，不要写循环
+
+多值参数（`goodsCode`、`keyword`、`--area`、`--category`）都接受逗号分隔，展开成笛卡尔积，
+**一条命令完成**：
+
+```bash
+zzapi goods quote <code1>,<code2> --area 上海,北京    # 2×2 = 4 条结果
+```
+
+- 展开后总调用数上限 50，超了 exit 2 并告知会产生多少次调用
+- 关键词里的字面逗号写 `\,`
+
+每条结果自带完整坐标（`goodsCode` + `areaCode` + `areaName`，搜索含 `keyword`），
+多值展开后不会分不清哪条对应哪个。
+
+## 退出码：6 是「部分成功」，不是失败
+
+```bash
+zzapi goods quote BADCODE,<goodcode>; echo $?    # → 6
+```
+
+批量时单项失败不影响其他项。**判定成败要看每项的 `ok` 布尔，不能只看退出码**：
+
+```bash
+zzapi goods quote <c1>,<c2> | jq '.items[] | select(.ok)'
+```
+
+`0` 成功（空结果也算成功，返回 `{"items":[],"count":0}`）· `2` 参数错/超上限 ·
+`4` goodsCode 不存在 · `6` 部分失败 · `7` 鉴权 · `8` 限流 · `9` 网络。
+错误对象带 `hint` 字段，照着做即可。
+
+## 其他
+
+- `--area 北京` 这类直辖市同名有省级/市级两个码，**取省级**（`110000`）；要市级直接传码。
+  输出坐标会回显实际生效的码
+- 默认字段是精选过的。要全部原始字段用 `--full`，要指定字段用 `--fields a,b`
+  （坐标字段裁不掉）
+- 大宗商品（钢铁建材）返回**品类级均价**，MRO/办公用品返回**具体 SKU 参考价**，
+  口径和单位不同，不要混着比
+
+<!-- 安装：仓库是私有的，npm 上没有这个包。从 checkout 里执行 npm i -g . -->
