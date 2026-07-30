@@ -3,11 +3,10 @@
  *
  * 码表是随包分发的分类 CSV（15,726 节点）。同名取 level 最小者；
  * 若最小 level 上仍然重名（实测 43 例，如「无缝钢管」），不猜——报错并列出候选 id。
- * CSV 700KB，只在真的用到 --category 时才解析。
+ * CSV 684KB，只在真的用到 --category 时才解析。
  */
 
-import { readFileSync } from 'node:fs';
-import { readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { localError } from '../errors.js';
 import { dataDir, type Resolved, type Resolver } from './index.js';
@@ -27,18 +26,23 @@ interface Index {
 
 let index: Index | null = null;
 
+/** 码表版本号记在 data/sources.json 里（不再编进文件名），ref sync 将来靠它跟平台比对。 */
+const CSV_NAME = 'goods-category.csv';
+
 function csvFile(): string {
   const dir = dataDir();
-  const hit = readdirSync(dir).find((f) => /^goods_category_v\d+\.csv$/.test(f));
-  if (!hit) {
-    throw localError(
-      'GENERIC',
-      'CATEGORY_TABLE_MISSING',
-      `${dir} 下找不到 goods_category_v*.csv`,
-      '重新安装 zzapi，或确认包内 data/ 完整',
-    );
-  }
-  return join(dir, hit);
+  const exact = join(dir, CSV_NAME);
+  if (existsSync(exact)) return exact;
+  // 兼容旧的带版本号文件名（goods_category_v<version>.csv），
+  // 以及将来 ref sync 下载下来还没改名的情况
+  const legacy = readdirSync(dir).find((f) => /^goods_category_v\d+\.csv$/.test(f));
+  if (legacy) return join(dir, legacy);
+  throw localError(
+    'GENERIC',
+    'CATEGORY_TABLE_MISSING',
+    `${dir} 下找不到 ${CSV_NAME}`,
+    '重新安装 zzapi，或确认包内 data/ 完整',
+  );
 }
 
 function load(): Index {

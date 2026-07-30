@@ -1,0 +1,19 @@
+{
+  "_comment": "随包分发的静态码表的出处与版本。ref sync 将来靠 category.version 与平台比对，决定要不要重新下载——所以这个版本号不能丢，它原先编在 CSV 文件名里（goods_category_v1763444921498.csv）。",
+  "category": {
+    "file": "goods-category.csv",
+    "version": "1763444921498",
+    "endpoint": "/openapi/price-track/category-notification",
+    "downloadPath": "https://static-xyxj.cneptp.com/upload/category/goods_category_v1763444921498.csv",
+    "capturedAt": "2026-07-30",
+    "rows": 15726
+  },
+  "area": {
+    "file": "product_area_config.json",
+    "version": null,
+    "endpoint": "/openapi/price-track/bp/get-product-area-config",
+    "note": "该接口不返回版本号，只能整表比对",
+    "capturedAt": "2026-07-30",
+    "rows": 427
+  }
+}
