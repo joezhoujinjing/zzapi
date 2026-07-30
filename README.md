@@ -2,7 +2,8 @@
 
 CLI for 中资 (cneptp) 全国企业采购交易寻源询价系统 OpenAPI — registry-driven, agent-friendly
 
-用法看 [SKILL.md](./SKILL.md)。这里是给改代码的人看的。
+用法看 [SKILL.md](./SKILL.md)，装/改/发的操作手册看 [AGENTS.md](./AGENTS.md)。
+这里是给改代码的人看的架构说明。
 
 ## 为什么需要它
 

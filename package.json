@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
-    "dev": "node --experimental-strip-types src/index.ts",
+    "dev": "npm run build && node dist/index.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
