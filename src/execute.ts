@@ -331,6 +331,8 @@ export interface FanoutHit {
   records: unknown[];
   /** 该 target 声明的默认字段，供裁剪 */
   fields: string[];
+  /** 解读提示，随命中一起输出 */
+  note?: string;
   error?: ZzError;
 }
 
@@ -338,6 +340,8 @@ export interface FanoutResult {
   /** resolve 归一化出来的坐标（信用代码 + 企业名等） */
   coordinate: Record<string, unknown>;
   items: FanoutHit[];
+  /** context 调用并入的背景信息（如空壳指数），非事实记录 */
+  context: Record<string, unknown>;
 }
 
 /**
@@ -468,16 +472,34 @@ export async function executeFanout(input: FanoutInput): Promise<FanoutResult[]>
         const data = await transport.call(t.path, body, t.ver ?? ep.ver);
         const arr = getPath(data, t.list);
         const records = Array.isArray(arr) ? arr : arr == null ? [] : [arr];
-        return { ok: true, category: t.category, label: t.label, n: records.length, records, fields: t.default_fields };
+        return { ok: true, category: t.category, label: t.label, n: records.length, records, fields: t.default_fields, note: t.note };
       } catch (e) {
         if (e instanceof ZzError) {
-          return { ok: false, category: t.category, label: t.label, n: 0, records: [], fields: t.default_fields, error: e };
+          return { ok: false, category: t.category, label: t.label, n: 0, records: [], fields: t.default_fields, note: t.note, error: e };
         }
         throw e;
       }
     });
 
-    out.push({ coordinate, items });
+    // context 调用：并入 meta 的背景信息。非致命——拿不到不影响主体结论
+    const context: Record<string, unknown> = {};
+    await Promise.all(
+      fan.context.map(async (c) => {
+        try {
+          const body: Record<string, unknown> = {};
+          for (const [apiParam, source] of Object.entries(c.params)) body[apiParam] = bound[source];
+          const data = await transport.call(c.path, body, c.ver ?? ep.ver);
+          const row = getPath(data, c.item);
+          if (row && typeof row === 'object') {
+            for (const [field, key] of Object.entries(c.as)) context[key] = (row as any)[field];
+          }
+        } catch {
+          /* 背景信息取不到就不给，不影响体检结论 */
+        }
+      }),
+    );
+
+    out.push({ coordinate, items, context });
   }
   return out;
 }

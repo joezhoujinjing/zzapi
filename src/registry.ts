@@ -125,6 +125,29 @@ const FanoutTargetSpec = z
     /** 结果数组路径 */
     list: z.string().default('data'),
     default_fields: z.array(z.string()).default([]),
+    /**
+     * 随该项命中一起输出的解读提示。
+     * 用于「命中不等于这家企业有问题」的接口：股权出质/冻结类记录里，
+     * 这家企业可能是债权人而非债务人，不看主体字段就会误报。
+     */
+    note: z.string().optional(),
+  })
+  .strict();
+
+/**
+ * 上下文调用：结果并入 summary 的 meta，而不是当成一个体检项。
+ * 空壳指数这类「人人有分」的推断评分属于此类——它是这份体检的背景，
+ * 不是事实记录，混进 items 会污染命中计数、也会让人分不清
+ * 「官方登记的事实」和「平台算的分」。
+ */
+const FanoutContextSpec = z
+  .object({
+    path: z.string(),
+    ver: z.number().optional(),
+    params: z.record(z.string()).default({}),
+    item: z.string().default('data'),
+    /** 结果字段 → 并入 meta 时的键名 */
+    as: z.record(z.string()),
   })
   .strict();
 
@@ -140,6 +163,8 @@ const FanoutSpec = z
      * 对得上用户心智：「我要查几家」。
      */
     max_entities: z.number().default(10),
+    /** 并入 meta 的上下文调用；失败不影响主体结论 */
+    context: z.array(FanoutContextSpec).default([]),
     targets: z.array(FanoutTargetSpec).min(1),
   })
   .strict();
@@ -236,6 +261,7 @@ export type ResultSpec = z.infer<typeof ResultSpec>;
 export type VariantSpec = z.infer<typeof VariantSpec>;
 export type FanoutSpec = z.infer<typeof FanoutSpec>;
 export type FanoutTargetSpec = z.infer<typeof FanoutTargetSpec>;
+export type FanoutContextSpec = z.infer<typeof FanoutContextSpec>;
 export type ResolveSpec = z.infer<typeof ResolveSpec>;
 export type EndpointSpec = z.infer<typeof EndpointSpec>;
 
@@ -295,6 +321,13 @@ function validateEndpoint(ep: Endpoint): void {
       }
     }
     if (!cats.size) throw new Error(`${where}: fanout 没有任何 category`);
+    for (const c of ep.fanout.context) {
+      for (const [apiParam, source] of Object.entries(c.params)) {
+        if (!bound.has(source)) {
+          throw new Error(`${where}: fanout.context 的 ${apiParam} 取自未知绑定 "${source}"`);
+        }
+      }
+    }
   }
   if (ep.send) {
     const bound = new Set([...Object.keys(ep.params), ...Object.values(ep.resolve?.bind ?? {})]);

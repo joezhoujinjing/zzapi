@@ -113,7 +113,9 @@ HTTP 用原生 `fetch`。**加依赖前先确认真的绕不过去。**
 | `result.views` | 一个结果多套视图（月/周序列） |
 | `result.transforms` | 值映射（类型码 → 人话） |
 | `variants[].prelude` | 链式：先调 A 拿值再喂给 B（`--by-area`） |
-| `fanout` | 并发扇出 N 个接口 + 按来源打标 + `--only` 分类过滤 |
+| `fanout` | 并发扇出 N 个接口 + 按来源打标 + `--only` 分类过滤 + `max_entities` |
+| `fanout.context` | 附加调用，结果并入 meta 而非 items（推断评分这类非事实记录） |
+| `fanout.targets[].note` | 随命中输出的解读提示（「命中不等于这家企业有问题」） |
 | `resolve` | 一个输入 → 一组命名绑定，`try_params` 按序试；扇出与单接口都可用 |
 | `send` | 请求体映射：平台参数名 → 绑定名，用于「用户给名字、接口要代码」 |
 | `ver` | per-endpoint 版本覆盖 |
