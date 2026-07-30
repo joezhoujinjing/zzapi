@@ -188,3 +188,42 @@ endpoints:
           path: /openapi/enterprise/risk/ffshzzgs
           params: { companyName: companyName }
           default_fields: [companyName, url]
+
+  # ——————————————————————————————————————————————————————————
+  - noun: enterprise
+    verb: cert
+    path: /openapi/enterprise/supplier-hierarchical-certificate
+    summary: 查供应商分级认证证书（有无认证 / 等级 / 有效期）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    # 和 risk 一样：用户给什么都行，内部归一化成信用代码
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    # 这个接口把统一社会信用代码叫 companyUniCode——同一样东西的第三种命名
+    # （另两种是 socialCreditCode、creditCode），靠映射吃掉，不必改代码
+    send:
+      companyUniCode: socialCreditCode
+    result:
+      list: data
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields:
+        [certified, companyApplyStandard, appraiseDate, expiryDate, certCode, certLevel, certificateUrl, failMessage]
+      transforms:
+        # 恒返回 1 条：appraiseResult 0/1 才是答案，未认证时其余字段全为 null
+        - path: appraiseResult
+          as: certified
+          map:
+            "1": 已认证
+            "0": 未认证

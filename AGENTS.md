@@ -38,6 +38,8 @@ skills/
     reference/        # 可选，长文档；SKILL.md 里链过去，按需加载
   供应商风险查询/        # 企业失信与黑名单 17 项体检
     SKILL.md
+  供应商资质查询/        # 供应商分级认证证书
+    SKILL.md
 ```
 
 **最低要求：直接读就行。** SKILL.md 是自包含的 Markdown，任何 agent 不需要任何
@@ -57,6 +59,7 @@ ln -sfn "$(pwd)/skills/寻源询价" <宿主的 skills 目录>/寻源询价
 # 例：Claude Code
 ln -sfn "$(pwd)/skills/寻源询价" ~/.claude/skills/寻源询价
 ln -sfn "$(pwd)/skills/供应商风险查询" ~/.claude/skills/供应商风险查询
+ln -sfn "$(pwd)/skills/供应商资质查询" ~/.claude/skills/供应商资质查询
 ```
 
 不同宿主的目录位置和加载约定各不相同（有的读 frontmatter 做匹配，有的要求在
@@ -111,7 +114,8 @@ HTTP 用原生 `fetch`。**加依赖前先确认真的绕不过去。**
 | `result.transforms` | 值映射（类型码 → 人话） |
 | `variants[].prelude` | 链式：先调 A 拿值再喂给 B（`--by-area`） |
 | `fanout` | 并发扇出 N 个接口 + 按来源打标 + `--only` 分类过滤 |
-| `resolve` | 一个输入 → 一组命名绑定，`try_params` 按序试 |
+| `resolve` | 一个输入 → 一组命名绑定，`try_params` 按序试；扇出与单接口都可用 |
+| `send` | 请求体映射：平台参数名 → 绑定名，用于「用户给名字、接口要代码」 |
 | `ver` | per-endpoint 版本覆盖 |
 | 参数 `type: bool` | CLI 开关 → 平台的 1/0 |
 | 参数 `send_as` | 平台参数名与 CLI 语义不符时改名 |

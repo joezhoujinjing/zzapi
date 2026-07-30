@@ -204,6 +204,12 @@ const EndpointSpec = z
     summary: z.string().optional(),
     params: z.record(ParamSpec).default({}),
     result: ResultSpec.optional(),
+    /**
+     * 请求体映射：平台参数名 → 绑定名（参数值或 resolve 产出）。
+     * 声明后请求体只由它决定，用户参数不再直接下发——用于「用户给的是
+     * 企业名，但接口要的是信用代码」这类需要中转的场景。
+     */
+    send: z.record(z.string()).optional(),
     variants: z.array(VariantSpec).default([]),
     resolve: ResolveSpec.optional(),
     fanout: FanoutSpec.optional(),
@@ -266,6 +272,7 @@ function validateEndpoint(ep: Endpoint): void {
     if (!p.resolver) continue;
     for (const f of getResolver(p.resolver).labelFields) contributed.add(f);
   }
+  for (const b of Object.values(ep.resolve?.bind ?? {})) contributed.add(b);
   for (const c of ep.result?.coordinate ?? []) {
     if (!contributed.has(c)) {
       throw new Error(
@@ -288,6 +295,16 @@ function validateEndpoint(ep: Endpoint): void {
       }
     }
     if (!cats.size) throw new Error(`${where}: fanout 没有任何 category`);
+  }
+  if (ep.send) {
+    const bound = new Set([...Object.keys(ep.params), ...Object.values(ep.resolve?.bind ?? {})]);
+    for (const [apiParam, source] of Object.entries(ep.send)) {
+      if (!bound.has(source)) {
+        throw new Error(
+          `${where}: send 的 ${apiParam} 取自 "${source}"，但它既不是参数名也不是 resolve.bind 产出的绑定名`,
+        );
+      }
+    }
   }
   if (ep.resolve) {
     for (const attempt of ep.resolve.try_params) {
