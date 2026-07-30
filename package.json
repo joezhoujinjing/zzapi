@@ -10,7 +10,7 @@
     "dist",
     "registry",
     "data",
-    "SKILL.md"
+    "skills"
   ],
   "engines": {
     "node": ">=20"
