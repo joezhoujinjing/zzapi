@@ -1,12 +1,9 @@
 /**
  * resolver：把「人话」翻译成平台要的码。
  *
- * 读的是随包分发的 data/ 静态码表，v1 不联网同步（同步能力随 ref 命令组延后）。
+ * 读的码表优先用 `zzapi ref sync` 刷到用户本地的副本，没有则回落到随包快照。
  * registry 里 `resolver: area` 这样引用；新增接口复用已有 resolver 时无需改代码。
  */
-
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 
 export interface Resolved {
   /** 传给 API 的值 */
@@ -25,10 +22,11 @@ export interface Resolver {
   label(code: string): Record<string, string | null>;
 }
 
-/** data/ 目录：dist/resolvers/*.js 与 src/resolvers/*.ts 到包根都是两级 */
-export function dataDir(): string {
-  return join(dirname(dirname(dirname(fileURLToPath(import.meta.url)))), 'data');
-}
+/**
+ * 码表文件路径：ref sync 刷到用户本地的副本优先，回落到随包快照。
+ * 查找顺序集中在 refdata.ts，这里只转发。
+ */
+export { resolveDataFile } from '../refdata.js';
 
 import { areaResolver } from './area.js';
 import { categoryResolver } from './category.js';

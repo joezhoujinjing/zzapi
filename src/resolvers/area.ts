@@ -7,9 +7,9 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { localError } from '../errors.js';
-import { dataDir, type Resolved, type Resolver } from './index.js';
+import { AREA_FILE, resolveDataFile } from '../refdata.js';
+import { type Resolved, type Resolver } from './index.js';
 
 interface AreaRow {
   areaCode: string;
@@ -54,7 +54,7 @@ let index: Index | null = null;
 
 function load(): Index {
   if (index) return index;
-  const file = join(dataDir(), 'product_area_config.json');
+  const file = resolveDataFile(AREA_FILE);
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(file, 'utf8'));
@@ -63,7 +63,7 @@ function load(): Index {
       'GENERIC',
       'AREA_TABLE_MISSING',
       `无法读取地区码表 ${file}：${(e as Error).message}`,
-      '重新安装 zzapi，或确认包内 data/product_area_config.json 存在',
+      '跑 zzapi ref sync 重新拉取，或重新安装 zzapi',
     );
   }
   const rows: any[] = Array.isArray(parsed) ? parsed : ((parsed as any)?.data ?? []);
