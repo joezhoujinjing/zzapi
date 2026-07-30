@@ -2,7 +2,7 @@
 
 CLI for 中资 (cneptp) 全国企业采购交易寻源询价系统 OpenAPI — registry-driven, agent-friendly
 
-用法看 [SKILL.md](./SKILL.md)，装/改/发的操作手册看 [AGENTS.md](./AGENTS.md)。
+用法看 [skills/寻源询价/SKILL.md](./skills/寻源询价/SKILL.md)，装/改/发的操作手册看 [AGENTS.md](./AGENTS.md)。
 这里是给改代码的人看的架构说明。
 
 ## 为什么需要它
@@ -30,6 +30,7 @@ src/
   refdata.ts     # 码表查找顺序：用户本地刷新副本 → 随包快照
   ref.ts         # ref sync / ref status（手写，非 registry，见下）
 data/            # 随包分发的静态码表快照，resolver 的燃料兜底
+skills/          # 随包分发的 Claude skill，一个业务域一个目录
 ```
 
 ### 加一个新接口

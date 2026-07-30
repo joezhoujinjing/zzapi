@@ -1,7 +1,8 @@
 # AGENTS.md
 
 给 agent 看的操作手册：怎么装、怎么用、怎么改、怎么发。
-用法细节在 [SKILL.md](./SKILL.md)，架构说明在 [README.md](./README.md)，这里只讲操作。
+用法细节在 [skills/寻源询价/SKILL.md](./skills/寻源询价/SKILL.md)，
+架构说明在 [README.md](./README.md)，这里只讲操作。
 
 ## 这是什么
 
@@ -25,17 +26,37 @@ zzapi auth status                  # 验证凭证
 > 若 `zzapi` 解析到了别的程序，`which zzapi` 查一下 PATH——这个名字在 PyPI
 > 和 npm 上都有同名但无关的项目。
 
-## 装成 Claude skill
+## Skill
 
-让 SKILL.md 成为单一真源，软链进 skills 目录，改仓库即生效：
+仓库自带 skill，一个业务域一个目录，随 npm 包分发：
 
-```bash
-mkdir -p ~/.claude/skills/zzapi
-ln -sf "$(pwd)/SKILL.md" ~/.claude/skills/zzapi/SKILL.md
+```
+skills/
+  寻源询价/
+    SKILL.md          # 必需，带 frontmatter（name / description）
+    scripts/          # 可选，脚本
+    reference/        # 可选，长文档；SKILL.md 里链过去，按需加载
 ```
 
-维护 skill 时**只改仓库里的 SKILL.md**，不要在 `~/.claude/skills/` 下另存一份，
-否则两边会各改各的。
+**软链整个目录**（不是单个文件），这样 `scripts/`、`reference/` 一起生效；
+仓库是单一真源，改完即生效：
+
+```bash
+ln -sfn "$(pwd)/skills/寻源询价" ~/.claude/skills/寻源询价
+```
+
+维护时**只改仓库里那份**，不要在 `~/.claude/skills/` 下另存副本，否则两边会分叉。
+
+### 加一个新 skill
+
+1. `mkdir -p skills/<业务域>`，写 `SKILL.md`，frontmatter 的 `name` 与目录同名
+2. `description` 要写清**什么时候该用它**——这是 agent 匹配的唯一依据，
+   把用户可能的问法写进去（「XX 现在多少钱」这类），别只写功能名词
+3. 软链进 `~/.claude/skills/`
+4. 内容要精炼：模型自己能推出来的别写，只留推错了会出事的（坑、非常规约定、
+   容易误判的语义）。长内容放 `reference/`，让 SKILL.md 保持可快速通读
+
+`skills/` 已在 `package.json` 的 `files` 里，新增目录自动随包分发。
 
 ## 开发
 
