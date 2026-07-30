@@ -76,6 +76,11 @@ function bind(name: string, spec: ParamSpec, raw: unknown, flag: string): Bindin
   if (spec.type === 'int') {
     return { value: toInt(name, raw, spec, flag), labels: {} };
   }
+  if (spec.type === 'bool') {
+    // CLI 是布尔开关，平台要的是 1/0
+    const on = raw === true || raw === 'true' || raw === 1 || raw === '1';
+    return { value: on ? 1 : 0, labels: {} };
+  }
   const s = String(raw);
   if (!s.trim() && spec.required) {
     throw localError('VALIDATION', 'EMPTY_VALUE', `${flag} 不能为空`);
@@ -95,7 +100,7 @@ function axisFor(name: string, spec: ParamSpec, input: unknown, flag: string): B
 
 function coordinateOf(ep: Endpoint, bindings: Record<string, Binding>): Record<string, unknown> {
   const coord: Record<string, unknown> = {};
-  for (const field of ep.result.coordinate) {
+  for (const field of (ep.result?.coordinate ?? [])) {
     if (bindings[field]) {
       coord[field] = bindings[field].value;
       continue;
@@ -247,8 +252,9 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
   }
 
   // 5. 执行
-  const listPath = ep.result.list;
-  const itemPath = ep.result.item;
+  const spec = ep.result!;
+  const listPath = spec.list;
+  const itemPath = spec.item;
   const metas: (Record<string, unknown> | null)[] = new Array(combos.length).fill(null);
 
   const outcomes = await mapConcurrent(
@@ -257,9 +263,11 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
     async (combo, i): Promise<Outcome<unknown[]>> => {
       const coordinate = coordinateOf(ep, combo);
       const body: Record<string, unknown> = {};
-      for (const [name, b] of Object.entries(combo)) body[name] = b.value;
+      for (const [name, b] of Object.entries(combo)) {
+        body[ep.params[name]?.send_as ?? name] = b.value;
+      }
       try {
-        const data = await transport.call(ep.path, body);
+        const data = await transport.call(ep.path!, body, ep.ver);
         let records: unknown[];
         let container: unknown = data;
         if (listPath !== undefined) {
@@ -273,9 +281,9 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
           records = one == null ? [] : [one];
           container = one;
         }
-        if (ep.result.meta.length && container && typeof container === 'object') {
+        if (spec.meta.length && container && typeof container === 'object') {
           const m: Record<string, unknown> = {};
-          for (const f of ep.result.meta) m[f] = (container as any)[f];
+          for (const f of spec.meta) m[f] = (container as any)[f];
           metas[i] = m;
         }
         return { ok: true, coordinate, value: records };
@@ -287,4 +295,163 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
   );
 
   return { outcomes, metas, view: input.view };
+}
+
+// ——————————————————————————————————————————————————————————————
+// 扇出：一个命令并发打 N 个接口
+// ——————————————————————————————————————————————————————————————
+
+export interface FanoutHit {
+  ok: boolean;
+  category: string;
+  label: string;
+  /** 该项返回的记录数；0 = 无风险记录 */
+  n: number;
+  records: unknown[];
+  /** 该 target 声明的默认字段，供裁剪 */
+  fields: string[];
+  error?: ZzError;
+}
+
+export interface FanoutResult {
+  /** resolve 归一化出来的坐标（信用代码 + 企业名等） */
+  coordinate: Record<string, unknown>;
+  items: FanoutHit[];
+}
+
+/**
+ * 归一化：把用户给的一个值（代码或企业名）换成一组命名绑定。
+ * try_params 按顺序试——先当代码试，不成再当名字试。
+ */
+async function runResolve(
+  ep: Endpoint,
+  transport: Transport,
+  inputs: Record<string, Binding>,
+): Promise<Record<string, unknown>> {
+  const spec = ep.resolve!;
+  let lastErr: ZzError | null = null;
+
+  for (const attempt of spec.try_params) {
+    const body: Record<string, unknown> = {};
+    let usable = true;
+    for (const [apiParam, source] of Object.entries(attempt)) {
+      const b = inputs[source];
+      if (b === undefined) { usable = false; break; }
+      body[apiParam] = b.value;
+    }
+    if (!usable) continue;
+
+    try {
+      const data = await transport.call(spec.path, body, spec.ver);
+      const raw = getPath(data, spec.list);
+      const row = Array.isArray(raw) ? raw[0] : raw;
+      if (!row || typeof row !== 'object') continue;
+      const bound: Record<string, unknown> = {};
+      for (const [field, bindName] of Object.entries(spec.bind)) {
+        bound[bindName] = (row as any)[field];
+      }
+      // 绑定必须完整，缺一个后面扇出就会漏接口
+      if (Object.values(bound).every((v) => v !== undefined && v !== null && v !== '')) {
+        return bound;
+      }
+    } catch (e) {
+      if (e instanceof ZzError) { lastErr = e; continue; }
+      throw e;
+    }
+  }
+
+  throw localError(
+    'NOT_FOUND',
+    'ENTERPRISE_NOT_FOUND',
+    lastErr?.message || '无法定位到唯一企业',
+    spec.hint ?? '换用精确的企业全名或统一社会信用代码',
+  );
+}
+
+export interface FanoutInput {
+  endpoint: Endpoint;
+  transport: Transport;
+  inputs: Record<string, unknown>;
+  /** --only 指定的分类；空 = 全部 */
+  only: string[];
+}
+
+export async function executeFanout(input: FanoutInput): Promise<FanoutResult[]> {
+  const { endpoint: ep, transport } = input;
+  const fan = ep.fanout!;
+
+  // 主参数照常支持逗号多值：一次体检多家企业
+  const axes: Axis[] = [];
+  for (const [name, spec] of Object.entries(ep.params)) {
+    const given = input.inputs[name] ?? spec.default;
+    if (given === undefined || given === '') {
+      if (spec.required) {
+        throw localError('VALIDATION', 'MISSING_PARAM', `缺少必填参数 <${name}>`);
+      }
+      continue;
+    }
+    const flag = spec.positional ? `<${name}>` : `--${flagName(name, spec)}`;
+    axes.push({ param: name, values: axisFor(name, spec, given, flag) });
+  }
+  const combos = cartesian(axes) as Record<string, Binding>[];
+
+  const known = [...new Set(fan.targets.map((t) => t.category))];
+  for (const c of input.only) {
+    if (!known.includes(c)) {
+      throw localError(
+        'VALIDATION',
+        'UNKNOWN_CATEGORY',
+        `未知分类「${c}」`,
+        `可用分类：${known.join('、')}`,
+      );
+    }
+  }
+  const targets = input.only.length
+    ? fan.targets.filter((t) => input.only.includes(t.category))
+    : fan.targets;
+
+  // 上限管的是展开后的总请求数，扇出也不例外
+  assertWithinLimit(combos.length * targets.length, [
+    ...axes,
+    { param: `扇出目标`, values: new Array(targets.length) },
+  ]);
+
+  const out: FanoutResult[] = [];
+  for (const combo of combos) {
+    const bound = ep.resolve ? await runResolve(ep, transport, combo) : {};
+    // 主参数自身也可被 fanout 引用
+    for (const [k, b] of Object.entries(combo)) bound[k] ??= b.value;
+
+    // 坐标 ≠ 全部绑定值。resolve 产出的标识（信用代码/企业名）与会展开的
+    // 主参数才是坐标；--history / --sanction-type 这类设置项只是入参，
+    // 把它们塞进每一行输出是噪音。
+    const coordinate: Record<string, unknown> = {};
+    for (const k of Object.keys(ep.resolve?.bind ?? {}).map((f) => ep.resolve!.bind[f])) {
+      coordinate[k] = bound[k];
+    }
+    for (const [name, spec] of Object.entries(ep.params)) {
+      if (spec.positional || spec.multi) coordinate[name] = bound[name];
+    }
+
+    const items = await mapConcurrent(targets, CONCURRENCY, async (t): Promise<FanoutHit> => {
+      const body: Record<string, unknown> = {};
+      for (const [apiParam, source] of Object.entries(t.params)) {
+        body[apiParam] = bound[source];
+      }
+      try {
+        const data = await transport.call(t.path, body, t.ver ?? ep.ver);
+        const arr = getPath(data, t.list);
+        const records = Array.isArray(arr) ? arr : arr == null ? [] : [arr];
+        return { ok: true, category: t.category, label: t.label, n: records.length, records, fields: t.default_fields };
+      } catch (e) {
+        if (e instanceof ZzError) {
+          return { ok: false, category: t.category, label: t.label, n: 0, records: [], fields: t.default_fields, error: e };
+        }
+        throw e;
+      }
+    });
+
+    out.push({ coordinate, items });
+  }
+  return out;
 }

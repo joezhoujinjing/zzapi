@@ -16,6 +16,22 @@ export interface RenderOptions {
   fields: string[] | null;
   json: boolean;
   color: boolean;
+  /** 关闭 registry 声明的默认行过滤，把接口原样返回的都列出来 */
+  all: boolean;
+}
+
+/** 行是否通过 registry 声明的默认过滤 */
+function passesFilter(row: any, spec: ResultSpec): boolean {
+  if (!spec.filter) return true;
+  for (const [field, rule] of Object.entries(spec.filter)) {
+    const v = row?.[field];
+    if (Array.isArray(rule)) {
+      if (!rule.map(String).includes(String(v))) return false;
+    } else if (rule.present) {
+      if (v === undefined || v === null || String(v).trim() === '') return false;
+    }
+  }
+  return true;
 }
 
 export interface Envelope {
@@ -139,8 +155,10 @@ export function buildEnvelope(
   viewName: string | null,
   opts: RenderOptions,
 ): Envelope {
-  const view = viewName ? (ep.result.views?.[viewName] ?? null) : null;
+  const spec = ep.result!;
+  const view = viewName ? (spec.views?.[viewName] ?? null) : null;
   const items: Record<string, unknown>[] = [];
+  let filtered = 0;
 
   outcomes.forEach((o) => {
     if (!o.ok) {
@@ -148,7 +166,11 @@ export function buildEnvelope(
       return;
     }
     for (const rec of o.value ?? []) {
-      const projected = project(rec, ep.result, view, opts);
+      if (!opts.all && !passesFilter(rec, spec)) {
+        filtered++;
+        continue;
+      }
+      const projected = project(rec, spec, view, opts);
       // 坐标先写、原始字段后覆盖，保证 --full 无损（原始字段一个不改、一个不少）。
       // 坐标独有的字段（areaName / keyword / 供应商行上的 goodsCode）无论如何都留下。
       const item: Record<string, unknown> = { ok: true, ...o.coordinate, ...projected };
@@ -165,7 +187,7 @@ export function buildEnvelope(
 
   const env: Envelope = { items, count: items.length };
 
-  const metaFields = ep.result.meta;
+  const metaFields = spec.meta;
   if (metaFields.length) {
     const present = metas.filter((m) => m !== null) as Record<string, unknown>[];
     if (present.length === 1 && outcomes.length === 1) {
@@ -175,6 +197,15 @@ export function buildEnvelope(
         .map((o, i) => (metas[i] ? { ...o.coordinate, ...metas[i] } : null))
         .filter(Boolean);
     }
+  }
+
+  // 过滤计数最后合并，否则会被上面的 meta 赋值覆盖掉。
+  // 被过滤掉多少必须报出来——静默丢弃会让人以为「搜到 129 条却只给我 2 条」是出错了。
+  if (filtered) {
+    const base = env.meta && !Array.isArray(env.meta) ? (env.meta as object) : {};
+    env.meta = Array.isArray(env.meta)
+      ? { perRequest: env.meta, filtered, filterHint: '用 --all 查看被过滤掉的条目' }
+      : { ...base, filtered, filterHint: '用 --all 查看被过滤掉的条目' };
   }
   return env;
 }
@@ -223,7 +254,7 @@ function table(rows: Record<string, unknown>[], columns: string[]): string {
 
 export function renderTable(ep: Endpoint, env: Envelope): string {
   if (!env.items.length) return '（无数据）';
-  const focus = ep.result.table_focus;
+  const focus = ep.result?.table_focus;
   const chunks: string[] = [];
 
   const hasSubTable = env.items.some(

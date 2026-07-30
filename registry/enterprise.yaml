@@ -1,0 +1,190 @@
+# 企业（enterprise）
+#
+# 两条命令：
+#   enterprise search <关键词>   模糊搜企业，拿信用代码
+#   enterprise risk   <代码或全名>  并发扇出 17 项风险检查，默认只列命中
+#
+# 实测记录（与文档不一致处，一律以实测为准）：
+#   - enterprise/search 的企业名字段是 companyName，文档写的 name 是错的
+#   - pageSize 上限 10，超过静默降级为 10 —— 所以这里 max 设 10，超限报错拦下
+#   - 搜索结果前排大量是无 creditCode 的注销企业，故默认过滤，--all 放开
+#   - wy-enterprise 只认精确全名或有效代码，模糊名报 2500005
+#   - 行政处罚 v2 未开通（2201007），故不收录
+
+module: enterprise
+
+endpoints:
+  # ——————————————————————————————————————————————————————————
+  - noun: enterprise
+    verb: search
+    path: /openapi/enterprise/search
+    summary: 按名称模糊搜企业，拿到统一社会信用代码
+    params:
+      keyword:
+        required: true
+        positional: true
+        multi: true
+        send_as: companyName   # 平台叫 companyName，但它是关键词，与返回行的同名字段会打架
+        desc: 企业名称关键词
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 10
+        min: 1
+        max: 10
+        desc: 每页条数（平台硬上限 10）
+    result:
+      list: data.list
+      coordinate: [keyword]
+      default_fields:
+        [companyName, creditCode, status, operName, industryName, registCapi, startDate]
+      meta: [totalCount, pageNum, pageSize]
+      # 没有信用代码的注销/吊销企业对下一步毫无用处，默认不出
+      filter:
+        creditCode: { present: true }
+        status: [存续, 在业, 迁出]
+
+  # ——————————————————————————————————————————————————————————
+  - noun: enterprise
+    verb: risk
+    summary: 企业风险体检——并发查 17 项名单，默认只列命中项
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史数据而非当前在册（7 个接口支持）
+      sanctionType:
+        type: int
+        flag: sanction-type
+        default: 1
+        min: 1
+        max: 3
+        desc: 制裁清单档位 1-制裁名单 2-出口管制 3-不可靠实体
+    # 先归一化：15 个接口要代码，2 个要企业名，用户通常只有其一
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }    # 先当代码试
+        - { companyName: target }   # 再当全名试
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: riskType
+      targets:
+        # —— 司法 ——
+        - category: 司法
+          label: 失信被执行人
+          path: /openapi/enterprise/risk/sxbzx
+          params: { socialCreditCode: socialCreditCode }
+          default_fields: [caseCode, lawEnforcementUnit, actsOfBreachOfTrust, performance, publishDate, regDate]
+
+        # —— 采购 ——
+        - category: 采购
+          label: 央企供应商不良行为
+          path: /openapi/enterprise/risk/yqgysblxw
+          params: { socialCreditCode: socialCreditCode }
+          default_fields: [source, actsOfBreachOfTrust, punishmentResult, jrhmd, jchmd, link]
+        - category: 采购
+          label: 政府采购违法失信
+          path: /openapi/enterprise/risk/zfcgwfsx
+          params: { socialCreditCode: socialCreditCode }
+          default_fields: [actsOfBreachOfTrust, punishmentResult, lawEnforcementUnit, dateOfPunishment, basisOfPunishment]
+        - category: 采购
+          label: 军队采购失信
+          path: /openapi/enterprise/risk/jdcgsx
+          params: { socialCreditCode: socialCreditCode }
+          default_fields: [actsOfBreachOfTrust, punishmentResult, lawEnforcementUnit, dateOfPunishment]
+        - category: 采购
+          label: 军队暂停资格
+          path: /openapi/enterprise/risk/jdztzg
+          params: { socialCreditCode: socialCreditCode }
+          default_fields: [actsOfBreachOfTrust, punishmentResult, lawEnforcementUnit, dateOfPunishment]
+
+        # —— 工商 ——
+        - category: 工商
+          label: 严重违法失信企业
+          path: /openapi/enterprise/risk/yzwfsx
+          params: { socialCreditCode: socialCreditCode }
+          default_fields: [actsOfBreachOfTrust, lawEnforcementUnit, dateOfPunishment, source]
+        - category: 工商
+          label: 空壳公司
+          path: /openapi/enterprise/risk/kkqy
+          params: { socialCreditCode: socialCreditCode }
+          default_fields: [companyName, socialCreditCode]
+        - category: 工商
+          label: 假冒国企
+          path: /openapi/enterprise/risk/counterfeitStateIndustryName
+          params: { socialCreditCode: socialCreditCode }
+          default_fields: [counterfeitName, publishDate]
+
+        # —— 税务 ——
+        - category: 税务
+          label: 重大税收违法失信
+          path: /openapi/enterprise/risk/zdsswfsx
+          params: { socialCreditCode: socialCreditCode }
+          default_fields: [natureOfTheCase, illegalSituation, releaseAuthority, checkUnit, releaseDate]
+
+        # —— 安全 ——
+        - category: 安全
+          label: 事故责任企业名录
+          path: /openapi/enterprise/risk/aqscglzs
+          params: { socialCreditCode: socialCreditCode, isHistory: history }
+          default_fields: [unitType, projectName, accidentResponsibilityDesc, accidentTime, deathCount, accidentLocation, publicTime]
+        - category: 安全
+          label: 安全生产严重失信
+          path: /openapi/enterprise/risk/aqscsx
+          params: { socialCreditCode: socialCreditCode, isHistory: history }
+          default_fields: [organ, jrhmd, jchmd, address, dataSource, publishTime]
+
+        # —— 医药 ——
+        - category: 医药
+          label: 价格招采失信医药企业
+          path: /openapi/enterprise/risk/sxyyqymd
+          params: { socialCreditCode: socialCreditCode, isHistory: history }
+          default_fields: [ratingProvince, currentRating, previousRating, dishonestReason, invalidStartDate, possibleRemoveTime]
+        - category: 医药
+          label: 药品联采违规名单
+          path: /openapi/enterprise/risk/gjzzyplhcgwgmd
+          params: { socialCreditCode: socialCreditCode, isHistory: history }
+          default_fields: [violationReason, measures, includedViolationDate, suspendedCentralizedPurchaseQualificationEndDate]
+        - category: 医药
+          label: 欺诈骗保
+          path: /openapi/enterprise/risk/ylbzj
+          params: { socialCreditCode: socialCreditCode, isHistory: history }
+          default_fields: [title, content, batch, jrhmd, publishTime, url]
+
+        # —— 劳动 ——
+        - category: 劳动
+          label: 拖欠农民工工资
+          path: /openapi/enterprise/risk/tqnmggz
+          params: { socialCreditCode: socialCreditCode, isHistory: history }
+          default_fields: [title, reason, details, organ, instrument, jrhmd, jchmd, province]
+
+        # —— 制裁 ——
+        - category: 制裁
+          label: 制裁与反制裁清单
+          path: /openapi/enterprise/risk/zcqd
+          params: { companyName: companyName, govSanctionDataType: sanctionType, isHistory: history }
+          default_fields: [country, summary, issuer, issueDate, suspendEndDate, dataType]
+
+        # —— 组织 ——
+        - category: 组织
+          label: 涉嫌非法社会组织
+          path: /openapi/enterprise/risk/ffshzzgs
+          params: { companyName: companyName }
+          default_fields: [companyName, url]

@@ -79,6 +79,40 @@ const PLATFORM_CODES: Record<string, Mapping> = {
     hint: '商品编码不能为空；用 zzapi goods search <关键词> 获取 goodsCode',
   },
 
+  // —— 限流 (exit 8) ——
+  '1601012': {
+    code: 'RATE_LIMITED',
+    exit: EXIT.RATE_LIMIT,
+    retryable: true,
+    hint: '触发平台调用频次限制，等待片刻后重试；批量扇出时可用 --only 缩小范围',
+  },
+
+  // —— 企业域 ——
+  '2500005': {
+    code: 'ENTERPRISE_NOT_FOUND',
+    exit: EXIT.NOT_FOUND,
+    retryable: false,
+    hint: '企业名必须精确匹配全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码',
+  },
+  '99': {
+    code: 'MISSING_IDENTIFIER',
+    exit: EXIT.VALIDATION,
+    retryable: false,
+    hint: '统一社会信用代码与企业名称至少要有一个',
+  },
+  '2201007': {
+    code: 'API_NOT_PROVISIONED',
+    exit: EXIT.AUTH,
+    retryable: false,
+    hint: '该接口平台侧尚未为此 appKey 配置参数，需联系平台开通',
+  },
+  '2500000': {
+    code: 'PLATFORM_BUSY',
+    exit: EXIT.NETWORK,
+    retryable: true,
+    hint: '平台侧繁忙或该数据源暂不可用；稍后重试，若持续失败则该档位可能未开通',
+  },
+
   // —— 未找到 (exit 4) ——
   '1205004': {
     code: 'GOODS_NOT_FOUND',

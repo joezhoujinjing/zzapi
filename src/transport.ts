@@ -10,8 +10,11 @@ import { getToken } from './auth.js';
 import { baseUrl, type Env } from './config.js';
 import { fromPlatformCode, isTokenExpired, localError, ZzError } from './errors.js';
 
-/** ver 恒为 "1"，传输层注入，不暴露给用户。写 "1.0"/"v1" 会报 1601008。 */
-const API_VER = '1';
+/**
+ * ver 由传输层注入，不暴露给用户。写 "1.0"/"v1" 会报 1601008。
+ * 绝大多数接口是 1；个别接口（如行政处罚 v2）要 2，由 registry 声明后覆盖。
+ */
+const DEFAULT_API_VER = 1;
 
 export interface TransportOptions {
   env: Env;
@@ -27,9 +30,9 @@ export class Transport {
    * 返回整个 body 而非 body.data，是为了让 registry 里的路径就是 `data.goodsList`
    * 这样的字面路径——声明看得见全貌，不依赖传输层偷偷剥了一层。
    */
-  async call(path: string, params: Record<string, unknown>): Promise<unknown> {
+  async call(path: string, params: Record<string, unknown>, ver?: number): Promise<unknown> {
     const token = await getToken({ env: this.opts.env, timeoutMs: this.opts.timeoutMs });
-    const body = { ...params, ver: API_VER };
+    const body = { ...params, ver: ver ?? DEFAULT_API_VER };
 
     let res = await this.post(path, body, token.accessToken);
     if (res.code != null && isTokenExpired(res.code)) {
