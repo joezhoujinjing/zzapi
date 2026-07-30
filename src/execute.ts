@@ -261,10 +261,31 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
     combos,
     CONCURRENCY,
     async (combo, i): Promise<Outcome<unknown[]>> => {
-      const coordinate = coordinateOf(ep, combo);
+      let bindings = combo;
+      let coordinate: Record<string, unknown>;
       const body: Record<string, unknown> = {};
-      for (const [name, b] of Object.entries(combo)) {
-        body[ep.params[name]?.send_as ?? name] = b.value;
+      try {
+        // resolve 对单接口同样生效：用户给企业名，接口要信用代码时先中转一次
+        if (ep.resolve) {
+          const bound = await runResolve(ep, transport, combo);
+          bindings = { ...combo };
+          for (const [k, v] of Object.entries(bound)) {
+            bindings[k] = { value: v, labels: {} };
+          }
+        }
+        coordinate = coordinateOf(ep, bindings);
+        if (ep.send) {
+          for (const [apiParam, source] of Object.entries(ep.send)) {
+            body[apiParam] = bindings[source]?.value;
+          }
+        } else {
+          for (const [name, b] of Object.entries(combo)) {
+            body[ep.params[name]?.send_as ?? name] = b.value;
+          }
+        }
+      } catch (e) {
+        if (e instanceof ZzError) return { ok: false, coordinate: coordinateOf(ep, combo), error: e };
+        throw e;
       }
       try {
         const data = await transport.call(ep.path!, body, ep.ver);
