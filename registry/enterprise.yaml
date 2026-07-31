@@ -85,6 +85,16 @@ endpoints:
     fanout:
       tag_category: category
       tag_label: riskType
+      # 空壳指数是「人人有分」的推断评分，不是事实记录。放 meta 当背景，
+      # 不进 items——否则会永远算 1 项命中，且让人分不清事实与平台判断。
+      # 实测量表：<20 低风险 / 20-40 中低 / 40+ 中风险
+      context:
+        - path: /openapi/enterprise/emptyshell_risk
+          params: { creditCode: socialCreditCode }
+          item: data
+          as:
+            riskScore: shellRiskScore
+            scoreLevel: shellRiskLevel
       targets:
         # —— 司法 ——
         - category: 司法
@@ -188,6 +198,116 @@ endpoints:
           path: /openapi/enterprise/risk/ffshzzgs
           params: { companyName: companyName }
           default_fields: [companyName, url]
+
+        # ——— 以下来自 enterprise-business-risk 模块 ———
+        # 该模块每个主题有 base / _list / _history 三个变体，实测
+        # base = 全集、_list ≡ isHistory:0、_history ≡ isHistory:1，
+        # 故一律用 base，历史与否交给 --history。
+
+        # —— 工商 ——
+        - category: 工商
+          label: 经营异常名录
+          path: /openapi/enterprise/abnormal
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [inReason, inDate, department, outReason, outDate, outDepartment, province]
+        - category: 工商
+          label: 严重违法（工商公示）
+          path: /openapi/enterprise/serious_illegal
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [illType, inReason, inDate, inDepartment, outReason, outDate, outDepartment]
+          note: 与「严重违法失信企业」为同一名录的另一条数据管线，字段更全；两者可能同时命中同一件事
+
+        # —— 处罚 ——
+        - category: 处罚
+          label: 行政处罚
+          path: /openapi/enterprise/administrative_punishment
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [number, illegalType, content, punishmentText, department, date, basedOn]
+        - category: 处罚
+          label: 环保处罚
+          path: /openapi/enterprise/huanbaochufas
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [documentNo, illegalType, punishmentType, punishmentResult, punishmentDept, punishmentDate, province]
+
+        # —— 税务 ——
+        - category: 税务
+          label: 非正常户
+          path: /openapi/enterprise/abnormal_enterprises
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [reason, state, judgeDate, judgeDepartment, overdueType, overdueAmount, area]
+        - category: 税务
+          label: 重大税收违法（工商公示）
+          path: /openapi/enterprise/huge_tax_punishment
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [caseType, truth, lawPunishment, checkDepartment, pubDepartment, time, area]
+          note: 与「重大税收违法失信」为同一事项的另一条数据管线，字段更全；两者可能同时命中
+        - category: 税务
+          label: 欠税公告
+          path: /openapi/enterprise/overduetaxs
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [overdueType, overdueAmount, currOverdueAmount, taxBureau, pubDepartment, pubDate, area]
+
+        # —— 司法 ——
+        - category: 司法
+          label: 股权冻结
+          path: /openapi/enterprise/judicial_freezes
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [beExecutedPerson, status, type, amount, executiveCourt, detailFreezeStartDate, detailFreezeEndDate, loseEfficacyReason, loseEfficacyDate]
+          note: 先看 beExecutedPerson 是不是本企业（可能是母公司），再看 status 是否已解除
+        - category: 司法
+          label: 终本案件
+          path: /openapi/enterprise/terminationcaseitem
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [name, court, caseNoTerminal, caseNoOrigin, filingDate, terminateDate, amount, failPerformAmount]
+          note: 先看 name 是不是本企业（可能是关联公司）
+
+        # —— 担保（自愿融资担保，不必然是负面，但需看主体）——
+        - category: 担保
+          label: 股权出质
+          path: /openapi/enterprise/equityquality
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [pledgor, pawnee, objectCompany, pledgorAmount, pledgorUnit, status, date, publicDate, cancelDate]
+          note: pledgor 是出质方、pawnee 是质权人。本企业若为 pawnee 则是债权人，不是风险；还要看 status 是否已失效
+        - category: 担保
+          label: 知识产权出质
+          path: /openapi/enterprise/knowledge_properties
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [name, type, pledgor, pawnee, period, status, publicDate]
+          note: pledgor 是出质方。本企业若为 pledgor，说明以知识产权质押融资
+        - category: 担保
+          label: 动产抵押
+          path: /openapi/enterprise/mortgages
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [number, amount, status, publicDate, regDate, department, mortgagees, guarantees]
+          note: mortgagees 是抵押权人（债权方）。本企业若在其中则是债权人，不是风险
+
+        # —— 存续（企业是否在正常经营）——
+        - category: 存续
+          label: 注销公告
+          path: /openapi/enterprise/logoutannouncement
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [logoutReason, belongOrg, auditRegDate, creditorStartDate, creditorEndDate, auditLeader, cancelDate]
+          note: 命中意味着企业正在走注销/解散流程——对供应商准入通常是硬否决项
+        - category: 存续
+          label: 清算组备案
+          path: /openapi/enterprise/clear_account
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [clearType, leader, employees]
+          note: 已成立清算组，通常与注销/解散同时出现
 
   # ——————————————————————————————————————————————————————————
   - noun: enterprise

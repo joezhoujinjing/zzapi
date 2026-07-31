@@ -225,6 +225,7 @@ function emitFanout(
           [fan.tag_category]: h.category,
           [fan.tag_label]: h.label,
           ...body,
+          ...(h.note ? { note: h.note } : {}),
         });
       }
     }
@@ -245,6 +246,7 @@ function emitFanout(
     }
     summaries.push({
       ...r.coordinate,
+      ...r.context,
       checked: r.items.length,
       hit: hit.length,
       clean: clean.length,
