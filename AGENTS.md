@@ -40,6 +40,8 @@ skills/
     SKILL.md
   供应商资质查询/        # 供应商分级认证证书
     SKILL.md
+  企业基本信息/          # 工商登记信息 + 关联方风险计数
+    SKILL.md
 ```
 
 **最低要求：直接读就行。** SKILL.md 是自包含的 Markdown，任何 agent 不需要任何
@@ -60,6 +62,7 @@ ln -sfn "$(pwd)/skills/寻源询价" <宿主的 skills 目录>/寻源询价
 ln -sfn "$(pwd)/skills/寻源询价" ~/.claude/skills/寻源询价
 ln -sfn "$(pwd)/skills/供应商风险查询" ~/.claude/skills/供应商风险查询
 ln -sfn "$(pwd)/skills/供应商资质查询" ~/.claude/skills/供应商资质查询
+ln -sfn "$(pwd)/skills/企业基本信息" ~/.claude/skills/企业基本信息
 ```
 
 不同宿主的目录位置和加载约定各不相同（有的读 frontmatter 做匹配，有的要求在
@@ -204,3 +207,18 @@ npm 要求发布时满足二者之一：账号开了 2FA（则加 `--otp=<6位�
   本地有就用，没有也不影响构建
 - 分类 CSV 不在仓库里，运行时拉取
 - 没有 CI
+
+## 平台的坑（都是实测撞出来的，不看会重复踩）
+
+- **同一个「统一社会信用代码」有三种参数名**：`socialCreditCode`（风险名单）、
+  `creditCode`（工商/司法类）、`companyUniCode`（分级认证）。用 `send` / target
+  的 `params` 映射解决，别改代码
+- **`pageSize` 上限三个域三个值**：goods 50 / enterprise-search 10 / business-risk 20。
+  enterprise-search 超限**静默降级**不报错，故 registry 里设 `max` 主动拦下
+- **business-risk 与 judicial-risk 的接口有 base/_list/_history 三变体**，
+  base 是全集、`_list` ≡ `isHistory:0`、`_history` ≡ `isHistory:1`。只声明 base
+- **返回形状不统一**：风险名单是裸数组（`list: data`），business/judicial 是
+  `{list,totalCount}`（`list: data.list`），wy-enterprise 是单对象（`item: data`）。
+  搞错会把容器对象当成 1 条记录，导致「恒定命中」
+- **平台数据会变**：实测某企业的央企供应商黑名单记录一天内从 2 条变 0 条
+- **调用频次按接口独立计**（`1601012` → exit 8），不是全局配额
