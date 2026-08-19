@@ -5,6 +5,9 @@
  * 命令树完全由 registry/*.yaml 派生。这个文件里不应出现任何具体接口的名字。
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Command, Option } from 'commander';
 import { getToken, willMintToken } from './auth.js';
 import type { Env } from './config.js';
@@ -17,7 +20,10 @@ import { loadRegistry, flagName, type Endpoint } from './registry.js';
 import { buildEnvelope, renderJson, renderTable, type RenderOptions } from './render.js';
 import { Transport } from './transport.js';
 
-const VERSION = '0.1.0';
+/** 版本号只在 package.json 维护一处；dist/index.js 的上一级就是包根 */
+const VERSION: string = JSON.parse(
+  readFileSync(join(dirname(dirname(fileURLToPath(import.meta.url))), 'package.json'), 'utf8'),
+).version;
 
 interface GlobalOpts {
   json: boolean;

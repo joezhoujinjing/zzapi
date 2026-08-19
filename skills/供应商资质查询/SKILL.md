@@ -57,4 +57,4 @@ zzapi enterprise cert <x> --full  # 无损，输出接口全部原始字段
 平台按接口独立限流，触发时报 `RATE_LIMITED`（exit 8），等一会儿再试。
 
 **资质是正面凭证，失信记录是负面记录，两者互不替代。** 完整的供应商准入判断还需要
-`zzapi enterprise risk <x>`（17 项失信名单，见「供应商风险查询」skill）。
+`zzapi enterprise risk <x>`（38 项失信名单，见「供应商风险查询」skill）。

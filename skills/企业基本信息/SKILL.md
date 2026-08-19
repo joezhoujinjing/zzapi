@@ -27,7 +27,8 @@ zzapi enterprise search 北信源                     # 名字不确定时先搜
 
 **`relationPromiseNum` / `relationExecutorsNum` 是关联方的**失信、被执行企业数，
 不是这家自己的记录。数值大说明其股东/高管/关联企业圈子有问题，即便本企业清白。
-风险体检（`zzapi enterprise risk`）也看不到这个。
+风险体检（`zzapi enterprise risk`）的 38 项里看不到它，只在其 meta 里以
+`relatedDishonestCount` / `relatedExecutedCount` 带出同样两个数。
 
 **`status` 存续 ≠ 一切正常。** 企业可能已决议解散、进入清算，而工商状态仍是
 「存续」。要确认得跑 `zzapi enterprise risk <x> --only 存续`。
@@ -43,3 +44,7 @@ zzapi enterprise info <x> --full  # 全部原始字段
 
 完整供应商判断还需要：`zzapi enterprise risk`（38 项风险）与
 `zzapi enterprise cert`（分级认证）。
+
+档案之外的工商明细走 `company` 命令组（`zzapi company --help`）：股东 `shareholders`、
+主要人员 `people`、对外投资 `investments`、分支机构 `branches`、变更记录 `changes`、
+曾用名 `name-history`、年报 `reports`、社保 `social-security` 等；股权穿透走 `zzapi relation parent|child|controller|graph`。
