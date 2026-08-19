@@ -1,0 +1,1229 @@
+# 工商信息（company）—— 「这家公司是谁」
+#
+# 来源：enterprise-baseinfo 分组 41 份 spec，折叠/取舍后 27 条命令，覆盖 29 个端点（企业档案 /enterprise 由 enterprise info 覆盖，见下）。
+# 未收录 11 个（个体户专表 ×10、结构化变更记录 ×1），理由见 tasks-out 简报。
+#
+# 命名规则（所有 verb 都是名词，不混动词）：
+#   - verb = 「返回的是什么」：info / branches / shareholders / people …
+#     复数 = 一组记录，单数 = 单对象。不用 get/list/query，不用平台 URL 末段。
+#   - 复合名词用连字符：bid-contacts / legal-rep-history / social-org
+#   - 平台成对的 `_list` / `_history` → 一条命令 + `--history` 开关
+#     （shareholders / people / investments / equity / contacts）
+#   - 本身只有历史轨迹、没有「当前」对应物的数据集 → `X-history` 名词
+#     （name-history / legal-rep-history / capital-history / address-history），
+#     当前值在 `enterprise info` 里；给这类命令再加 --history 开关会变成永远必须打开的开关
+#   - 主体类型专表直接用类型名：foundation / lawfirm / social-org / public-institution / hk-company
+#
+# 入参约定（与 enterprise risk / cert 一致）：
+#   位置参数 <target> = 统一社会信用代码 或 企业全名（精确）。内部先用
+#   wy-enterprise 归一化成信用代码 + 企业名，两者进 coordinate，--fields 裁不掉。
+#   代价是每个实体多一次调用；换来的是 agent 有名字有代码都能直接用，以及每行自带双标识。
+#   需要 zzEid 的专表（社会组织/律所/基金会/事业单位/香港公司/英文名/科技资质/社会组织地址）
+#   改用 /openapi/enterprise/zz_eid 归一化。
+#
+# 响应路径约定（沿用 enterprise.yaml 实测结论，未实调处标 TODO）：
+#   带 pageNum/pageSize 的 → data.list；不分页多条 → data；单对象 → item: data
+#
+# 已知 spec 可疑处（按常识处理，标 TODO）：
+#   - employees_alls_list 的 name/jobTitle/nameType、history_oper_names 的 pid、
+#     migration_enterprise 的 sourceType 都标「必填」，但它们显然是筛选条件 → 按可选处理
+#   - employees_alls 无基础路径 spec，只有 _list/_history；按 business-risk 的实测规律
+#     （基础路径 = 全集，isHistory 0/1 区分）推断 /openapi/enterprise/employees_alls 存在
+
+module: enterprise-baseinfo
+
+endpoints:
+  # ══════════════════════════════════════════════════════════════
+  # 主体档案
+  # ══════════════════════════════════════════════════════════════
+
+  # 企业工商档案（/openapi/enterprise/enterprise）不在此收录：`enterprise info` 用的是 resolve 本来就要调的
+  # wy-enterprise 端点（不引入新端点），给出同一份档案，且多出关联失信/被执行计数。实测比亚迪两端点字段
+  # 对比：/enterprise 独有的 10 个字段（industryCode1-4 / industryName1-4 / canbaoNum / registCapiNew）全为 null，
+  # 其默认字段是 enterprise info 的子集——无可合并项。
+
+  # default_fields 与 enterprise info 同口径（法人/资本/日期/状态/类型/行业）—— 这是任意类型主体
+  # （含社会组织/事业单位/律所）都能查到的精简版；已是企业的优先用 enterprise info，字段更全。
+  - noun: company
+    verb: overview
+    path: /openapi/enterprise/all_enterprise
+    summary: 全类型主体基本信息（企业/社会组织/事业单位/律所通用，19 字段精简版）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或主体全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 名称必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+    result:
+      item: data   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [operName, registCapi, startDate, status, econKind, industryName]
+
+  # default_fields 只取 brief —— 这条命令的全部价值就是那段简介文本；name 在 coordinate
+  - noun: company
+    verb: profile
+    path: /openapi/enterprise/best_brief
+    summary: 企业简介（一段文字介绍）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证：分页接口按 data.list 取
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [brief]
+      meta: [totalCount]
+
+  # default_fields 留空 —— spec 没给响应字段，响应本身就只有 id，原样输出最诚实。
+  # 专表命令内部已自动归一化 zzEid，一般不用手动调这条；留着便于排查。
+  - noun: company
+    verb: id
+    path: /openapi/enterprise/zz_eid
+    summary: 企业 id（zzEid）——社会组织/律所等专表内部用它关联，一般不需手动查
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+    result:
+      item: data   # TODO 待实调验证：spec 未给响应字段，猜 data = { zzEid }
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: []
+
+  # ══════════════════════════════════════════════════════════════
+  # 股权 / 人员 / 投资
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取股东名/类型/比例/认缴/实缴/起止 —— 穿透看「谁持多少、认缴还是实缴、
+  # 什么时候进的」；--history 时 endDate 才有值，所以一并带上（7 个，比上限多 1 是为历史）。
+  # 折叠：partners_alls_list(当前) + partners_alls(历史) → 基础路径 + isHistory
+  - noun: company
+    verb: shareholders
+    path: /openapi/enterprise/partners_alls   # TODO 待实调验证：基础路径是否接受 isHistory 0/1（business-risk 模块实测如此）
+    summary: 工商公示股东（名称/类型/出资比例/认缴/实缴）；--history 看已退出股东
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史股东（已退出）而非当前在册
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [stockName, stockType, stockPercent, totalShouldCapi, totalRealCapi, startDate, endDate]
+      meta: [totalCount]
+
+  # default_fields 取股东名/类型/比例/认缴/实缴/出资日期 —— 与 shareholders 同问题不同数据源
+  # （平台清洗过的股比表，可按出资日期筛）；一般先用 shareholders（工商公示原始）。
+  - noun: company
+    verb: equity
+    path: /openapi/enterprise/best_stock_info
+    summary: 股比数据（平台清洗版股东出资：比例/认缴/实缴/出资日期，可按出资日期区间筛）；--history 看历史
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史股比而非当前
+      conDateStart:
+        flag: from
+        desc: 出资日期起（YYYY-MM-DD）
+      conDateEnd:
+        flag: to
+        desc: 出资日期止（YYYY-MM-DD）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      conDateStart: conDateStart
+      conDateEnd: conDateEnd
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [stockName, stockType, stockPercent, shouldCapi, realCapi, conDate]
+      meta: [totalCount]
+
+  # default_fields 取姓名/职位/起止任职时间 —— 「高管是谁、什么时候上的、走了没」；
+  # nameType/sex/pid 都是代码或内部 id。
+  # 折叠：employees_alls_list + employees_alls_history → 基础路径 + isHistory
+  - noun: company
+    verb: people
+    path: /openapi/enterprise/employees_alls   # TODO 待实调验证：基础路径无 spec，按 _list/_history 规律推断
+    summary: 主要人员（董监高：姓名/职位/任职起止）；--history 看已离任人员
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史主要人员（已离任）而非现任
+      name:
+        desc: 按姓名筛
+      jobTitle:
+        flag: title
+        desc: 按职位筛（如 董事长）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      name: name
+      jobTitle: jobTitle
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [name, jobTitle, startDate, endDate]
+      meta: [totalCount]
+
+  # default_fields 取被投企业名/信用代码/股比/认缴/状态/成立日期 —— 「对外投了谁、占多少、
+  # 那家还活着吗」；被投方注册资本/行业等放 --full。
+  - noun: company
+    verb: investments
+    path: /openapi/enterprise/investments
+    summary: 对外投资（被投企业/持股比例/认缴额/被投方状态）；--history 看已退出的投资
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史对外投资（已退出）而非当前
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [investName, investCreditNo, stockPercentage, shouldCapi, investStatus, investStartDate]
+      meta: [totalCount]
+
+  # default_fields 取分支名/负责人/登记机关/注册号 —— 「有没有分支机构、在哪登记、谁负责」；
+  # subEid 是内部 id。
+  - noun: company
+    verb: branches
+    path: /openapi/enterprise/branches
+    summary: 分支机构（名称/负责人/登记机关）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [name, operName, belongOrg, regNo]
+      meta: [totalCount]
+
+  # ══════════════════════════════════════════════════════════════
+  # 变更与历史轨迹
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取日期/事项/变更后 —— 「什么时候、改了什么、改成了什么」；type 是字典码。
+  # beforeContent/afterContent 都是长文本（高管备案一条就是整份名单），实测 20 条默认输出
+  # 7KB 里大头是这两个字段；默认只出变更后，变更前用 --fields beforeContent 或 --full 再看。
+  # 平台把日期区间标为必填，这里给宽区间默认值，agent 默认拿到全量，需要再收窄。
+  - noun: company
+    verb: changes
+    path: /openapi/enterprise/change_records
+    summary: 工商变更记录（变更事项/变更前后内容/日期），默认全时段，--from/--to 收窄
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      changeDateStart:
+        flag: from
+        default: "1900-01-01"   # TODO 待实调验证：日期格式与是否允许宽区间
+        desc: 变更日期起（YYYY-MM-DD）
+      changeDateEnd:
+        flag: to
+        default: "2099-12-31"   # TODO 待实调验证
+        desc: 变更日期止（YYYY-MM-DD）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      changeDateStart: changeDateStart
+      changeDateEnd: changeDateEnd
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [changeDate, changeItem, afterContent]
+      meta: [totalCount]
+
+  # default_fields 取曾用名/变更时间 —— 「以前叫什么、什么时候改的」；formatName 是清洗副本，
+  # isActual/uTags 是内部标记。
+  - noun: company
+    verb: name-history
+    path: /openapi/enterprise/history_names
+    summary: 曾用名（历史名称及变更时间）；当前名称看 enterprise info
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [historyName, date]
+      meta: [totalCount]
+
+  # default_fields 取法人姓名/变更日期 —— 「法人换过几次、什么时候」；pid 是内部人员 id。
+  # spec 把 pid 标必填，按筛选条件处理为可选。
+  - noun: company
+    verb: legal-rep-history
+    path: /openapi/enterprise/history_oper_names
+    summary: 历任法定代表人及变更日期；当前法人看 enterprise info
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pid:
+        desc: 按法人 pid 筛（一般不用）   # TODO 待实调验证：spec 标必填，疑为筛选条件
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      pid: pid
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [name, date]
+      meta: [totalCount]
+
+  # default_fields 取注册资本/币种/变更时间/来源 —— 「增资还是减资、哪年、哪来的数」；
+  # registCapiNew 是数值副本，--full 再看。
+  - noun: company
+    verb: capital-history
+    path: /openapi/enterprise/history_regist_capis
+    summary: 注册资本变更历史（历次金额/币种/变更时间）；当前注册资本看 enterprise info
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [registCapi, currencyUnit, date, source]
+      meta: [totalCount]
+
+  # default_fields 取迁移日期/迁出地址/迁入地址/来源 —— 「搬过家没、从哪搬到哪」；
+  # 省市区码值 6 个字段是地址的代码冗余。
+  # spec 把 sourceType 标必填且未说明取值，按筛选条件处理为可选。
+  - noun: company
+    verb: address-history
+    path: /openapi/enterprise/migration_enterprise
+    summary: 注册地址迁移轨迹（迁移日期/迁出地/迁入地）；当前地址看 enterprise info
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      sourceType:
+        flag: source
+        desc: 按来源类型筛（取值见平台文档）   # TODO 待实调验证：spec 标必填但未给取值表
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      sourceType: sourceType
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [moveDate, moveFromAddress, moveToAddress, sourceType]
+      meta: [totalCount]
+
+  # default_fields 取行业名/行业码/纳入时间 —— 只有 4 个字段，去掉 id 就是全部。
+  - noun: company
+    verb: industry
+    path: /openapi/enterprise/last_industry
+    summary: 最新行业归类（国民经济行业分类及纳入时间）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [industryName, industryCode, startDate]
+      meta: [totalCount]
+
+  # ══════════════════════════════════════════════════════════════
+  # 联系方式 / 网址
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取电话数组/邮箱数组/地址数组/状态 —— 问的就是「怎么联系」；
+  # 顶层 name/creditNo/operName/registCapi 与 info 重复，不再出。
+  - noun: company
+    verb: contacts
+    path: /openapi/enterprise/phone_info
+    summary: 工商公示联系方式（电话/邮箱/地址，各带获取日期）；--history 看历史联系方式
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史联系方式而非当前
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+    result:
+      item: data   # TODO 待实调验证：单对象内含 address/telephones/emails 三个数组
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [telephones, emails, address, status]
+      table_focus: telephones
+
+  # default_fields 取联系人/电话/地址/来源/时间 —— 从招投标文件里抠出来的联系人，
+  # 来源（招标单位/代理/中标单位）决定可信度，所以 sourceName 必带。
+  # dataType 默认 1,2,3 三路一起查，coordinate 里的 dataType 标明每行是哪一类。
+  - noun: company
+    verb: bid-contacts
+    path: /openapi/enterprise/enterpriseExtend
+    summary: 招投标文件提取的补充联系信息（联系人/电话/地址 + 来源）；工商公示的用 company contacts
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      dataType:
+        type: int
+        flag: type
+        multi: true
+        default: "1,2,3"
+        min: 1
+        max: 3
+        desc: 信息类型 1-联系人 2-联系电话 3-联系地址
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      dataType: dataType
+    result:
+      list: data   # TODO 待实调验证：不分页多条按 data 取；若为单对象需改 item: data
+      coordinate: [socialCreditCode, companyName, target, dataType]
+      default_fields: [contactName, contactPhone, contactAddress, sourceName, createdTime]
+
+  # default_fields 取网址名/网址/类型 —— 5 个字段去掉 id 和已在 coordinate 的 isOfficial。
+  # isOfficial 平台必填：默认 1 只看官网（agent 问「官网是什么」）；--official 0 看其他网址。
+  - noun: company
+    verb: websites
+    path: /openapi/enterprise/websites
+    summary: 工商公示网址（默认只看官网；--official 0 看非官网）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      isOfficial:
+        type: int
+        flag: official
+        default: 1
+        min: 0
+        max: 1
+        desc: 1 只看官网 / 0 看其他网址
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      isOfficial: isOfficial
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target, isOfficial]
+      default_fields: [webName, webUrl, webType]
+      meta: [totalCount]
+
+  # ══════════════════════════════════════════════════════════════
+  # 年报
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取销售总额/净利润/资产总额/负债总额/纳税总额/从业人数 —— 年报里能回答
+  # 「多大规模、赚不赚钱、欠多少、养多少人」的六个数；年份在 coordinate。
+  # 年报是企业自报，不一定填全，字段为空是常态。
+  - noun: company
+    verb: reports
+    path: /openapi/enterprise/report_details
+    summary: 工商年报（企业自报的营收/利润/资产/负债/纳税/人数），按年份查
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      reportYear:
+        required: true
+        flag: year
+        multi: true
+        desc: 年报年份，如 2024；可逗号分隔多年
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      reportYear: reportYear
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target, reportYear]
+      default_fields: [saleIncome, netAmount, totalEquity, debitAmount, taxTotal, colleguesNum]
+      meta: [totalCount]
+
+  # default_fields 取五险参保人数 + 养老欠缴 —— 参保人数是最硬的「实际有多少人」信号，
+  # 欠缴金额是经营压力信号；缴费基数/是否展示等 20 来个字段 --full 再看。
+  - noun: company
+    verb: social-security
+    path: /openapi/enterprise/social_security
+    summary: 年报社保信息（五险参保人数/欠缴金额），按年份查
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      reportYear:
+        required: true
+        flag: year
+        multi: true
+        desc: 年报年份，如 2024；可逗号分隔多年
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      reportYear: reportYear
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target, reportYear]
+      default_fields: [yanglaobxNum, yiliaobxNum, shiyebxNum, gongshangbxNum, shengyubxNum, dwYanglaobxJe]
+      meta: [totalCount]
+
+  # ══════════════════════════════════════════════════════════════
+  # 需要 zzEid 的专表（主体类型专属档案 / 补充表）
+  # 这些接口只认企业 id，先用 zz_eid 归一化。
+  # TODO 待实调验证：zz_eid 的响应形状（假设 data = { zzEid }），一处验清全组通用。
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取英文全称/简称 —— 5 个字段去掉 id/eid/中文名就是这两个。
+  - noun: company
+    verb: english-name
+    path: /openapi/enterprise/t_fenname
+    summary: 企业英文名（全称/简称）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/zz_eid
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        zzEid: zzEid
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      zzEid: zzEid
+    result:
+      list: data   # TODO 待实调验证：不分页表按 data 数组取
+      coordinate: [zzEid, target]
+      default_fields: [name, fenname, senname]
+
+  # default_fields 取类型/级别/状态/年份/有效期起止 —— 供应商资质常问「是不是高新、
+  # 哪年认定的、还在有效期吗」；type/level 是码值，映射成人话。
+  - noun: company
+    verb: tech-certs
+    path: /openapi/enterprise/t_technological_alls
+    summary: 科技型企业资质（高新/科技型中小/专精特新等认定：类型/级别/状态/有效期）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/zz_eid
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        zzEid: zzEid
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      zzEid: zzEid
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [zzEid, target]
+      default_fields: [name, type, level, state, year, validStart, validEnd]
+      meta: [totalCount]
+      transforms:
+        - path: type
+          map:
+            "110001": 高新企业
+            "110002": 科技型中小企业
+            "110003": 科技企业孵化器
+            "110004": 众创空间
+            "110005": 企业技术中心
+            "110006": 火炬计划项目
+            "110007": 技术创新示范企业
+            "110008": 技术先进型服务企业
+            "110009": 民营科技企业
+            "110010": 专精特新企业
+            "110011": 科技小巨人企业
+            "110012": 专精特新小巨人
+            "110013": 创新型企业
+            "110014": 创新型试点企业
+            "110015": 创新型领军企业
+            "110016": 雏鹰企业
+            "110017": 隐形冠军
+            "110018": 牛羚企业
+            "110019": 独角兽企业
+            "110020": 未来独角兽企业
+            "110021": 潜在独角兽企业
+            "110022": 种子独角兽企业
+            "110023": 服务型制造示范企业
+            "110024": 服务型制造示范培育企业
+            "110025": 制造业单项冠军
+            "110026": 制造业单项冠军培育企业
+            "110027": 上市后备企业
+            "110028": 工业设计中心
+            "110029": 企业研发中心
+            "110030": 知识产权示范企业
+            "110031": 知识产权优势企业
+        - path: level
+          map:
+            "01": 国家级
+            "02": 省级
+            "03": 市级
+            "04": 县区级
+
+  # default_fields 取名称/法人/状态/成立日期/注册资本/公募资格 —— 基金会的「是谁、谁管、
+  # 还在不在、多大、能不能公开募捐」；章程/宗旨是长文本。
+  - noun: company
+    verb: foundation
+    path: /openapi/enterprise/t_foundation_info
+    summary: 基金会登记档案（仅基金会：法人/状态/注册资本/公募资格/主管单位）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或基金会全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/zz_eid
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        zzEid: zzEid
+      hint: 名称必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      zzEid: zzEid
+    result:
+      list: data   # TODO 待实调验证
+      coordinate: [zzEid, target]
+      default_fields: [name, operName, status, startDate, registCapi, canPublic]
+      transforms:
+        - path: canPublic
+          map: { "1": 是, "0": 否, "-1": 未知 }
+
+  # default_fields 取组织名/负责人/状态/成立日期/开办资金/业务主管单位 —— 社会组织（协会/
+  # 学会/民非）的「是谁、谁负责、还在不在、多大、归谁管」；年检/评估/许可是 JSON 数组，--full 看。
+  - noun: company
+    verb: social-org
+    path: /openapi/enterprise/t_organization
+    summary: 社会组织登记档案（仅社团/民非：负责人/状态/开办资金/业务主管单位；年检评估在 --full）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或组织全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/zz_eid
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        zzEid: zzEid
+      hint: 名称必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      zzEid: zzEid
+    result:
+      list: data   # TODO 待实调验证
+      coordinate: [zzEid, target]
+      default_fields: [ename, people, state, startDate, capital, department]
+
+  # default_fields 取地址/获取描述/日期/邮编 —— 10 个字段去掉 id、区域码、时间戳就是这些。
+  - noun: company
+    verb: social-org-address
+    path: /openapi/enterprise/address_other_list
+    summary: 社会组织地址（仅社会组织；企业地址看 enterprise info / company contacts）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或组织全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/zz_eid
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        zzEid: zzEid
+      hint: 名称必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      zzEid: zzEid
+    result:
+      list: data   # TODO 待实调验证
+      coordinate: [zzEid, target]
+      default_fields: [address, name, date, postcode]
+
+  # default_fields 取名称/法人/状态/成立日期/举办单位/经费来源 —— 事业单位的「是谁、谁办的、
+  # 靠财政还是自收自支」；证书起止 --full 看。
+  - noun: company
+    verb: public-institution
+    path: /openapi/enterprise/t_public_institution
+    summary: 事业单位登记档案（仅事业单位：法人/状态/举办单位/经费来源）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或单位全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/zz_eid
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        zzEid: zzEid
+      hint: 名称必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      zzEid: zzEid
+    result:
+      list: data   # TODO 待实调验证
+      coordinate: [zzEid, target]
+      default_fields: [name, operName, status, startDate, approveDepartment, expenditureSource]
+
+  # default_fields 取中文名/状态/成立日期/律师人数/总所分所/注册资金 —— 律所的「多大、
+  # 是总所还是分所、还在执业吗」；合伙人/负责人是 JSON 数组，--full 看。
+  - noun: company
+    verb: lawfirm
+    path: /openapi/enterprise/t_lawfirms
+    summary: 律师事务所档案（仅律所：状态/成立日期/律师人数/总所分所/注册资金）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或律所全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/zz_eid
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        zzEid: zzEid
+      hint: 名称必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      zzEid: zzEid
+    result:
+      list: data   # TODO 待实调验证
+      coordinate: [zzEid, target]
+      default_fields: [lawNameCn, state, issuanceDate, lawyerNo, lawType, apital]
+
+  # default_fields 取中英文名/商业登记证号/状态/成立日期/解散日期 —— 港企没有内地信用代码，
+  # BR 号就是它的主体标识；「还在不在」看 hkStatus + dissolutionDate。
+  - noun: company
+    verb: hk-company
+    path: /openapi/enterprise/t_hkcompanys
+    summary: 香港公司注册档案（仅港企：中英文名/商业登记证号/状态/成立与解散日期）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 公司全名（必须精确）；港企通常没有内地信用代码
+    resolve:
+      path: /openapi/enterprise/zz_eid
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        zzEid: zzEid
+      hint: 名称必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称
+    send:
+      zzEid: zzEid
+    result:
+      list: data   # TODO 待实调验证
+      coordinate: [zzEid, target]
+      default_fields: [nameCn, nameEn, brNumber, hkStatus, startDate, dissolutionDate]

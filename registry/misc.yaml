@@ -1,0 +1,657 @@
+# 四个小组：企业发展（venture）/ 私募基金（fund）/ 新闻舆情（news）/ 地产（property）
+#
+# 按语义拆成四个 noun 而不是塞进一个 misc：顶层 --help 的 noun 描述是机械生成的
+# 「<noun> 相关命令」，noun 本身就是 agent 选命令的唯一线索，misc 什么也说明不了。
+#
+#   venture  finance / products / rivals / investor / team / tags   创投画像（融资、产品、竞品、投资机构、团队、标签）
+#   fund     manager / execs / partners / dishonest                 私募基金管理人登记信息
+#   news     list / read                                            新闻舆情：列表 → 用 oid 读正文
+#   property building / land                                        建筑业企业资质（招采最有用）、购地数据
+#
+# 实测记录（2026-08-20，深圳市腾讯计算机系统有限公司）：
+#   - 全部返回 data.list + totalCount/pageNum/pageSize
+#   - article_content 要 oid（列表行的 oid 字段，不是 id）；当天刚抓的新闻可能还没正文（空列表），
+#     隔天的能读到。没有把「列表→正文」用 variants.prelude 串成一条：prelude 会把当页 10-20 篇
+#     正文全拉回来（每篇几千字），对 agent 是 token 炸弹；而且舆情筛查看标题+情感就够了，
+#     正文只在追问某一篇时才需要——两步走（news list 拿 oid → news read <oid>）更合适
+#   - /openapi/enterprise/building 原生支持 isHistory，返回的 certName 一个字段就列全
+#     「建筑工程施工总承包特级, 市政公用工程施工总承包特级, …」
+#   - invest_info 按投资机构名查（不是按企业），不走 resolve
+
+module: misc
+
+endpoints:
+  # ══════════════════════════════════════════════════════════════
+  # venture —— 企业发展 / 创投画像
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取融资日/轮次/金额/估算金额/币种/投资人 —— 回答「融过几轮、最近一轮多少钱、谁投的」
+  - noun: venture
+    verb: finance
+    path: /openapi/enterprise/company_finance
+    summary: 融资历史（轮次/金额/投资人），条数看 meta.totalCount
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [roundDate, round, amount, estimatedAmount, currency, investors]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取产品名/类型/域名/描述 —— 回答「做什么产品、App 还是网站」
+  - noun: venture
+    verb: products
+    path: /openapi/enterprise/company_products
+    summary: 公司产品（App/小程序/网站/公众号）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      kind:
+        desc: 产品类型 android/ios/miniapp/website/wechat/weibo/其他（不传=全部）
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      kind: kind
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [proName, kind, domain, description]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取竞品名/竞品所属企业 —— 表就这两个有效字段，其余是内部 id
+  # 实测字段名是 proName，文档写的 pro_name 是错的
+  - noun: venture
+    verb: rivals
+    path: /openapi/enterprise/company_similars
+    summary: 竞争对手 / 竞品
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [proName, simEname]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取机构名/被投企业/轮次/日期/金额/币种 —— 一行一笔投资事件，回答「这家机构投了谁」
+  # 入参是投资机构名（不是企业信用代码），所以不走 resolve、不带 creditCode 坐标
+  - noun: venture
+    verb: investor
+    path: /openapi/enterprise/invest_info
+    summary: 投资机构画像与投资事件（按机构名查，如 红杉资本）
+    params:
+      investName:
+        required: true
+        positional: true
+        multi: true
+        desc: 投资机构名称
+      page:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    send:
+      investName: investName
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [investName]
+      default_fields: [investName, ename, round, roundDate, amount, currency]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取姓名/职位/教育背景/工作经历 —— 回答「核心团队是谁、什么背景」
+  - noun: venture
+    verb: team
+    path: /openapi/enterprise/project_member
+    summary: 项目核心成员（姓名/职位/履历）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [pname, pos, edu, works]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取标签名/标签类型/关联分数 —— 回答「平台给它打的是什么赛道」
+  # 实测该接口不认 pageNum/pageSize（传什么都返回第 1 页 20 条），所以不暴露翻页参数
+  - noun: venture
+    verb: tags
+    path: /openapi/enterprise/project_tag
+    summary: 项目行业标签（赛道画像），固定返回前 20 条
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [tagName, tagType, confidence]
+      meta: [totalCount]
+
+  # ══════════════════════════════════════════════════════════════
+  # fund —— 私募基金管理人（中基协登记）
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取登记编号/机构类型/登记日/注册资本/管理规模/诚信信息 —— 回答「是不是登记的管理人、什么类型、多大规模、有没有诚信问题」；无记录 = 不是私募管理人
+  - noun: fund
+    verb: manager
+    path: /openapi/enterprise/privatefund_manager_list
+    summary: 私募基金管理人登记信息（是否登记/类型/规模/诚信），--history 看注销登记
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      type:
+        desc: 机构类型 100201-私募证券 100202-私募股权/创投 100203-其他（不传=全部）
+      history:
+        type: bool
+        default: false
+        desc: 查历史（已注销）登记
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      type: type
+      isHistory: history
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [fundNo, type, fundDate, regCapi, manageInterval, dishonest]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取姓名/职务/部门/入职/离职 —— 回答「高管是谁、在不在任」
+  - noun: fund
+    verb: execs
+    path: /openapi/enterprise/privatefund_emprecord
+    summary: 私募管理人高管任职记录
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      fundNo:
+        flag: fund-no
+        desc: 中基协登记编号（不传=按企业查）
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      fundNo: fundNo
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [name, title, department, entryDate, leaveDate]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取股东名/认缴比例/认缴金额 —— 回答「谁出的钱、占多少」
+  - noun: fund
+    verb: partners
+    path: /openapi/enterprise/privatefund_partner
+    summary: 私募管理人出资人（股东/认缴比例），--history 看历史出资人
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      fundNo:
+        flag: fund-no
+        desc: 中基协登记编号（不传=按企业查）
+      history:
+        type: bool
+        default: false
+        desc: 查历史出资人
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      fundNo: fundNo
+      isHistory: history
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [stockName, stockPercent, shouldCapi]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取信息类型/内容/登记编号 —— 表就这三个有效字段；有记录 = 中基协公示过诚信问题
+  - noun: fund
+    verb: dishonest
+    path: /openapi/enterprise/privatefund_mgrdishonest
+    summary: 私募管理人诚信信息（中基协公示的失联/异常/处分）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      fundNo:
+        flag: fund-no
+        desc: 中基协登记编号（不传=按企业查）
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      fundNo: fundNo
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [infoType, content, fundNo]
+      meta: [totalCount, pageNum, pageSize]
+
+  # ══════════════════════════════════════════════════════════════
+  # news —— 新闻舆情（列表 → 正文两步走）
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取标题/时间/来源/情感/链接/oid —— 舆情筛查看标题+情感就够；oid 给 news read 用，url 给引用用
+  - noun: news
+    verb: list
+    path: /openapi/enterprise/article_enterprise
+    summary: 企业新闻舆情列表（标题/来源/情感倾向），总量看 meta.totalCount；正文用 news read <oid>
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      class:
+        desc: 来源类别 新闻 / 微信（不传=全部）
+      source:
+        desc: 新闻来源（媒体名）
+      title:
+        desc: 标题关键词
+      pubTime:
+        flag: date
+        desc: 发布时间（yyyy-MM-dd）
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      classType: class
+      source: source
+      title: title
+      pubTime: pubTime
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [title, pubTime, source, sentiment, url, oid]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取标题/时间/来源/情感/负面指数/相关企业/正文 —— 读正文就是为了正文；关键词、主题分类等 NLP 字段走 --full
+  - noun: news
+    verb: read
+    path: /openapi/enterprise/article_content
+    summary: 读一篇新闻正文（oid 来自 news list），当天新抓的可能尚无正文
+    params:
+      oid:
+        required: true
+        positional: true
+        multi: true
+        desc: 新闻 oid（news list 输出的 oid 字段）
+    result:
+      list: data.list
+      coordinate: [oid]
+      default_fields: [title, pubTime, source, sentiment, negIndex, companies, content]
+      meta: [totalCount]
+
+  # ══════════════════════════════════════════════════════════════
+  # property —— 地产组：建筑业企业资质（招采最有用）、购地数据
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取证书名/资质名称(总承包/专业承包等级清单)/证书号/发证日/到期/状态/发证机关 —— 工程类供应商核验就看 certName 里「几级、哪些专业」和 validEnd 过没过期
+  - noun: property
+    verb: building
+    path: /openapi/enterprise/building
+    summary: 建筑业企业资质证书（施工总承包/专业承包等级、有效期），--history 看已失效证书
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      type:
+        desc: 证书类型字典码（不传=全部）
+      state:
+        desc: 证书状态码 1-正常 2-注销 3-过期 4-暂停 5-撤销 6-失效 7-未知
+      history:
+        type: bool
+        default: false
+        desc: 查历史（已失效/换证前）证书
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      type: type
+      stateCode: state
+      isHistory: history
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [licenseName, certName, registerNo, validStart, validEnd, state, issueUnit]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取类型/土地位置/面积/用途/成交价/时间 —— 回答「拿过哪些地、多大、多少钱」；requestType 码映射成人话
+  - noun: property
+    verb: land
+    path: /openapi/enterprise/goudi_information
+    summary: 购地数据（地块公示/成交/转让/抵押），条数看 meta.totalCount
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      kind:
+        desc: 数据类型 1-地块公示 2-结果公告 3-土地转让 4-土地抵押 5-大地块出让（不传=全部）
+      signingMode:
+        flag: mode
+        desc: 供应方式（如 挂牌出让/协议出让/划拨）
+      landLevel:
+        flag: level
+        desc: 土地级别
+      industry:
+        desc: 行业分类
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      requestType: kind
+      signingMode: signingMode
+      landLevel: landLevel
+      industry: industry
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [requestType, location, area, landUse, price, releaseTime]
+      meta: [totalCount, pageNum, pageSize]
+      transforms:
+        - path: requestType
+          map:
+            "1": 地块公示
+            "2": 结果公告
+            "3": 土地转让
+            "4": 土地抵押
+            "5": 大地块出让

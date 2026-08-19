@@ -1,0 +1,263 @@
+# 企业关系（relation）—— 围标串标 / 穿透式风险
+#
+#   relation controller <企业>      实际控制人（企业或自然人）
+#   relation parent     <企业>      一层上级控股方（企业或自然人）
+#   relation child      <企业>      一层下级控股企业
+#   relation graph      <企业>      上下各两层关联企业 + 人员
+#   relation person     <personId>  某个人关联的全部企业
+#   relation risk       <企业>      关联方（股东/对外投资/分支）的失信、被执行计数
+#   relation find       <代码,代码>  两家以上企业之间 5 层内有没有关联路径
+#
+# 典型问题 → 命令：
+#   「这两家投标企业是不是同一实控人」        → find（或各查 controller 对比）
+#   「这个人还控制哪些公司」                  → person
+#   「供应商本身干净，母公司/兄弟公司呢」     → risk（计数）→ parent / graph（明细）
+#
+# 入参统一用 <target>：信用代码或精确企业全名都行，先经 wy-enterprise 归一化成
+# creditCode（同 enterprise risk/cert 的做法），坐标因此每行带 creditCode + companyName。
+#
+# 实测记录（2026-08-20，样本：恒大地产集团及武汉子公司、小米科技、华为、比亚迪）：
+#   - 盘上 spec 的 response_fields 有 6 个为空，以下形状与字段全部来自实调，非文档
+#   - controller / graph：data 是关系图 {nodes:[{id,type,name,creditNo}], edges:[{sourceId,targetId,rtype,percent,job}]}
+#       rtype：stock 持股 / oper 法定代表人 / employer 任职(job) / actual_person 实控
+#       controller 对恒大、华为、比亚迪都返回空图（平台未认定实控人），小米 → 雷军 97.5%
+#       graph 一家恒大子公司 177KB——它就是大，问「兄弟公司/母公司」优先用 parent/child/risk
+#   - parent / child / person：data 是裸数组 [{name, creditNo, type E|P, id, percent, hasChild}]
+#       type P 的 id 就是 personId，可直接喂给 relation person
+#   - risk：data.list（RelationRiskInfo[]），恒大武汉 → 母公司 恒大地产 失信 404 / 被执行 550
+#   - find：平台要求 creditCodes/companyNames 是 JSON 数组，逗号字符串报 1001004「请求体参数不合法」。
+#       registry 参数只有 string/int/bool，⚠ 此命令目前不可用，需要 TS 给参数加 type: list
+#       （不能用 multi——multi 是笛卡尔展开成多次请求，正好和「一次传多家」相反）
+
+module: enterprise-relation
+
+endpoints:
+  # ——————————————————————————————————————————————————————————
+  # 实际控制人：返回一张小图——nodes 里 type P 的就是实控人，edges 的 percent 是控制比例
+  # default_fields 取 nodes/edges（就这两个字段）—— 「是谁、握多少、通过哪条链」全在里面；
+  # 空图 = 平台未认定实控人，不是「没有」
+  - noun: relation
+    verb: controller
+    path: /openapi/enterprise/relation/acutal-person
+    summary: 企业实际控制人（企业或自然人）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+    result:
+      item: data                 # 实测：{nodes, edges}
+      coordinate: [creditCode, companyName]
+      default_fields: [nodes, edges]
+
+  # ——————————————————————————————————————————————————————————
+  # 上级企业（一层上级控股的企业或自然人）
+  # default_fields 取 名称/信用代码/类型/持股比例/id —— 「谁控着它、占多少」；id 不是噪音：
+  # type 为自然人时它就是 personId，是 relation person 的入口。去掉 hasChild/label/enterpriseInfo。
+  - noun: relation
+    verb: parent
+    path: /openapi/enterprise/relation/higher-level
+    summary: 一层上级控股方（企业或自然人）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+    result:
+      list: data                 # 实测：裸数组
+      coordinate: [creditCode, companyName]
+      default_fields: [name, creditNo, type, percent, id]
+      transforms:
+        - path: type
+          map: { E: 企业, P: 自然人 }
+
+  # ——————————————————————————————————————————————————————————
+  # 下级企业（一层下级控股企业）
+  # default_fields 取 名称/信用代码/类型/持股比例/id —— 「它控着谁、占多少」；与 parent 同形。
+  - noun: relation
+    verb: child
+    path: /openapi/enterprise/relation/lower-level
+    summary: 一层下级控股企业
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+    result:
+      list: data                 # 实测：裸数组
+      coordinate: [creditCode, companyName]
+      default_fields: [name, creditNo, type, percent, id]
+      transforms:
+        - path: type
+          map: { E: 企业, P: 自然人 }
+
+  # ——————————————————————————————————————————————————————————
+  # 关联企业（上下各两层的企业 + 人员）：一张图，nodes + edges 就是全部字段
+  # 输出天然很大（恒大一家子公司 177KB）——适合「把整张网拿回去自己算」，
+  # 问「母公司/子公司/关联方脏不脏」请用 parent / child / risk
+  - noun: relation
+    verb: graph
+    path: /openapi/enterprise/relation/related
+    summary: 上下各两层的关联企业与人员
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+    result:
+      item: data                 # 实测：{nodes, edges}
+      coordinate: [creditCode, companyName]
+      default_fields: [nodes, edges]
+
+  # ——————————————————————————————————————————————————————————
+  # 人员关联企业：personId 来自 controller/parent/graph 里 type=P 节点的 id
+  # default_fields 取 企业名称/信用代码/持股比例/企业 id —— 「这个人还持有哪些公司、各占多少」
+  # （实测字段就这几个，没有任职角色/状态）
+  - noun: relation
+    verb: person
+    path: /openapi/enterprise/relation/person-stock
+    summary: 某个人关联的全部企业（按 personId）
+    params:
+      personId:
+        required: true
+        positional: true
+        multi: true
+        desc: 人员 id（来自实控人 / 股东 / 高管等记录）
+    result:
+      list: data                 # 实测：裸数组
+      coordinate: [personId]
+      default_fields: [name, creditNo, percent, id]
+
+  # ——————————————————————————————————————————————————————————
+  # 关联风险：关联方（股东 / 对外投资 / 分支机构）各自的失信、被执行计数
+  # default_fields 取 关联方名称/信用代码/关系类型/失信数/被执行数/风险总数 ——
+  # 回答「供应商本身干净，但母公司/子公司/分支在不在名单上」：一眼看出哪家关联方脏、
+  # 脏在哪一类；去掉 id（内部 id）。type 码映射成人话。
+  - noun: relation
+    verb: risk
+    path: /openapi/enterprise/relation/risk
+    summary: 关联方（股东/对外投资/分支机构）的失信与被执行计数
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      riskSort:
+        type: int
+        flag: sort
+        default: 0
+        min: 0
+        max: 2
+        desc: 排序依据 0-风险总数 1-失信数 2-被执行数
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      riskSort: riskSort
+    result:
+      list: data.list            # 实测：{list:[RelationRiskInfo]}
+      coordinate: [creditCode, companyName]
+      default_fields: [name, creditNo, relation, dishonestyNum, executedNum, riskNum]
+      transforms:
+        - path: type
+          as: relation
+          map:
+            "1": 股东
+            "2": 对外投资
+            "3": 分支机构
+
+  # ——————————————————————————————————————————————————————————
+  # 企业间关联关系：2-10 家企业之间 5 层以内的关联路径 —— 围标判定的核心命令
+  # ⚠ 实测：creditCodes/companyNames 必须是 JSON 数组，逗号字符串被拒（1001004）。
+  #   registry 参数类型只有 string/int/bool，声明保留、接口契约是对的，但在 TS 支持
+  #   `type: list`（逗号拆成数组下发）之前此命令调不通。summary 里已标明，免得 agent 选它。
+  #   返回形状按 controller/graph 推断为 {nodes, edges}（rtype 应含 stock/oper/employer/actual_person
+  #   及电话/邮箱/地址类）# TODO 待实调验证
+  - noun: relation
+    verb: find
+    path: /openapi/enterprise/relation/find
+    summary: ⚠暂不可用（需 registry 支持数组参数）多家企业之间 5 层以内的关联路径（围标串标核查）
+    params:
+      creditCodes:
+        positional: true
+        desc: 逗号分隔的统一社会信用代码，至少 2 个、最多 10 个；不给则必须给 --company-names
+      companyNames:
+        desc: 逗号分隔的企业全名，至少 2 个、最多 10 个（与信用代码二选一）
+      depth:
+        type: int
+        default: 5
+        min: 1
+        max: 5
+        desc: 最大穿透层级 1-5。默认 5——围标核查漏掉一条远路比多看几行更糟
+      types:
+        desc: 只查这些关系类型，逗号分隔 1-股东 2-董高监 3-法人 4-疑似实控人 5-电话 6-邮箱 7-地址；不给查全部
+    send:
+      creditCodes: creditCodes
+      companyNames: companyNames
+      depth: depth
+      types: types
+    result:
+      item: data                 # TODO 待实调验证：推断与 graph 同形 {nodes, edges}
+      coordinate: [creditCodes]
+      default_fields: [nodes, edges]

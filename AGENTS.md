@@ -36,9 +36,12 @@ skills/
     SKILL.md          # 必需，YAML frontmatter（name / description）+ 正文
     scripts/          # 可选，脚本
     reference/        # 可选，长文档；SKILL.md 里链过去，按需加载
-  供应商风险查询/        # 企业失信与黑名单 17 项体检
+  供应商风险查询/        # 企业失信与黑名单 38 项体检
+    reference/          # 38 项清单与逐项解读细则
     SKILL.md
   供应商资质查询/        # 供应商分级认证证书
+    SKILL.md
+  企业基本信息/          # 工商登记信息 + 关联方风险计数
     SKILL.md
 ```
 
@@ -60,6 +63,7 @@ ln -sfn "$(pwd)/skills/寻源询价" <宿主的 skills 目录>/寻源询价
 ln -sfn "$(pwd)/skills/寻源询价" ~/.claude/skills/寻源询价
 ln -sfn "$(pwd)/skills/供应商风险查询" ~/.claude/skills/供应商风险查询
 ln -sfn "$(pwd)/skills/供应商资质查询" ~/.claude/skills/供应商资质查询
+ln -sfn "$(pwd)/skills/企业基本信息" ~/.claude/skills/企业基本信息
 ```
 
 不同宿主的目录位置和加载约定各不相同（有的读 frontmatter 做匹配，有的要求在
@@ -123,6 +127,28 @@ HTTP 用原生 `fetch`。**加依赖前先确认真的绕不过去。**
 | 参数 `send_as` | 平台参数名与 CLI 语义不符时改名 |
 | 参数 `resolver` | 引用 resolvers/（地区、分类） |
 
+## registry 文件一览（命令树 = noun → verb）
+
+| 文件 | noun | 命令数 | 管什么 |
+|---|---|---|---|
+| `price-track.yaml` | `goods` | 4 | 商品价格、趋势、供应商 |
+| `enterprise.yaml` | `enterprise` | 4 | 搜企业、38 项风险体检、分级认证、工商档案 |
+| `baseinfo.yaml` | `company` | 27 | 股东/高管/投资/分支/变更/年报/社保/各类专表 |
+| `business-info.yaml` | `bizinfo` | 15 | 招投标、抽查、许可、纳税、海关、招聘、园区 |
+| `business-risk.yaml` | `bizrisk` | 12 | 经营异常/处罚/欠税/冻结/出质/抵押的**明细** |
+| `judicial.yaml` | `judicial` | 12 | 被执行/失信/限高/开庭/文书/公告/立案/拍卖/破产的**明细** |
+| `relation.yaml` | `relation` | 7 | 实控人、上下级股权、关系图谱、关联方风险 |
+| `ip.yaml` | `ip` | 17 | 专利/商标/著作权/域名 + 各行业资质扇出 |
+| `misc.yaml` | `venture` `fund` `news` `property` | 14 | 融资/竞品/私募/新闻/建筑资质/购地 |
+
+体检与明细是互补关系：`enterprise risk` 答「有没有」（默认只列命中），`bizrisk` /
+`judicial` 各 verb 答「具体什么、多少钱」（可翻页，`meta.totalCount` 给总数）。
+同一个平台 path 出现在两处是有意的，不是重复。
+
+**list 类命令默认只取 5 条**（`--limit` 最多 20）——默认输出要让 agent 一眼看完，
+总数看 `meta.totalCount`，要更多翻页。长文本字段（案件当事人 JSON、变更前后内容、
+文书全文）默认不出，`--fields` 点名或 `--full` 再看。
+
 ## 加一个新接口：只写 YAML
 
 命令树、`--help`、参数校验、类型转换、resolver、默认字段全部从
@@ -161,8 +187,9 @@ endpoints:
 - **坐标字段不可被 `--fields` 裁掉**。多值展开后不带坐标的数组无法解读
 - **`--full` 必须无损**，原样吐全部原始字段、不做任何加工。它是唯一的保真出口
 - **`ver` 由传输层注入**，默认 1，registry 可 per-endpoint 覆盖（写 `"1.0"` 会报 1601008）
-- **平台有调用频次限制**（`1601012` → exit 8）。17 路扇出很容易撞上，
-  压测或批量体检时要退避重试，别急着重跑
+- **平台有调用频次限制**（`1601012` → exit 8）。38 路扇出很容易撞上，
+  压测或批量体检时要退避重试，别急着重跑。**resolve 用的 wy-enterprise 几乎每条
+  企业命令都要先调一次**，连续跑几十条命令就会把它单独打到限频
 - 退出码语义：`0` 成功（含空结果）/ `2` 参数 / `4` 未找到 / `6` 部分失败 /
   `7` 鉴权 / `8` 限流 / `9` 网络
 
@@ -204,3 +231,21 @@ npm 要求发布时满足二者之一：账号开了 2FA（则加 `--otp=<6位�
   本地有就用，没有也不影响构建
 - 分类 CSV 不在仓库里，运行时拉取
 - 没有 CI
+
+## 平台的坑（都是实测撞出来的，不看会重复踩）
+
+- **同一个「统一社会信用代码」有三种参数名**：`socialCreditCode`（风险名单）、
+  `creditCode`（工商/司法类）、`companyUniCode`（分级认证）。用 `send` / target
+  的 `params` 映射解决，别改代码
+- **`pageSize` 上限三个域三个值**：goods 50 / enterprise-search 10 / business-risk 20。
+  enterprise-search 超限**静默降级**不报错，故 registry 里设 `max` 主动拦下
+- **business-risk 与 judicial-risk 的接口有 base/_list/_history 三变体**，
+  base 是全集、`_list` ≡ `isHistory:0`、`_history` ≡ `isHistory:1`。只声明 base
+- **返回形状不统一**：风险名单是裸数组（`list: data`），business/judicial 是
+  `{list,totalCount}`（`list: data.list`），wy-enterprise 是单对象（`item: data`）。
+  搞错会把容器对象当成 1 条记录，导致「恒定命中」
+- **平台数据会变**：实测某企业的央企供应商黑名单记录一天内从 2 条变 0 条
+- **调用频次按接口独立计**（`1601012` → exit 8），不是全局配额
+- **resolve 只在 exit 4（没查到企业）时才换下一个 try_param**；限频 / 鉴权 / 网络错误
+  原样上抛。曾经全部吞成 `ENTERPRISE_NOT_FOUND`，agent 以为名字不对、换名字重试，
+  正好在限频时加大调用量

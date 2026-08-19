@@ -16,7 +16,16 @@ CLI for 中资 (cneptp) 全国企业采购交易寻源询价系统 OpenAPI — r
 类型转换、resolver、默认字段全部从 `registry/*.yaml` 派生。
 
 ```
-registry/price-track.yaml   # 5 个接口的全部声明
+registry/                   # 一个 YAML 一个业务域，见 AGENTS.md「registry 文件一览」
+  price-track.yaml          #   goods：价格/趋势/供应商
+  enterprise.yaml           #   enterprise：搜索 / 38 项风险体检 / 认证 / 档案
+  baseinfo.yaml             #   company：工商明细 27 条
+  business-info.yaml        #   bizinfo：经营信息 15 条
+  business-risk.yaml        #   bizrisk：经营风险明细 12 条
+  judicial.yaml             #   judicial：司法明细 12 条
+  relation.yaml             #   relation：股权关系 7 条
+  ip.yaml                   #   ip：知产与资质 17 条
+  misc.yaml                 #   venture / fund / news / property 14 条
 src/
   index.ts       # commander 命令树生成（不含任何具体接口的名字）
   registry.ts    # YAML 加载 + zod 校验
@@ -110,6 +119,7 @@ ZZAPI_APP_KEY=... ZZAPI_APP_SECRET=... node dist/index.js auth status
 ## 尚未覆盖
 
 - `ref areas` / `ref categories`（查看码表内容）。`ref sync` / `ref status` 已实现
-- `price-track/mall/` 下 11 个 SKU 接口、企业风险等其余模块
-  （全平台共 535 条文档化路由）
-- 限流码未知，`errors.ts` 里 exit 8 的映射待真实触发后补
+- `price-track/mall/` 下 11 个 SKU 接口、证券信息模块、个体户专表
+  （全平台共 535 条文档化路由，企业信息域已接入 185 个端点 / 108 条命令）
+- `price-track/mall/` 之外：`resolve` 的命中响应尚未复用给主调用（`enterprise info`
+  对 wy-enterprise 打两次）

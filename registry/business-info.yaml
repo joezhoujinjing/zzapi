@@ -1,0 +1,686 @@
+# 经营信息（bizinfo）—— enterprise-business-info 模块：经营侧的事实数据
+#
+# 服务供应商履约能力评估：「这家公司有没有资质、做过什么项目、规模多大、经营是否正常」。
+# 与 bizrisk（有没有问题）相对，bizinfo 回答「有没有能力」，所以 default_fields 偏向
+# 资质名称 / 等级 / 有效期 / 发证机关 / 项目与金额，而不是处罚与金额。
+#
+# 命令一览（按用途分组）：
+#   招投标   bid / bid-text / won / tender
+#   监管合规 inspect / random-inspect / license / simple-cancel
+#   税务海关 taxpayer / tax-rating / customs
+#   规模     hiring
+#   园区     park / park-of / park-firms
+#
+# _list/_history 折叠：checkups、double_checkups、license_info、new_jobs、whole_park、
+#   belong_whole_park、whole_park_company 七对成对接口，按 enterprise-business-risk
+#   模块的实测结论（base = 全集，isHistory 0/1 对应 _list/_history，见 commit 1d4408c）
+#   折叠为 base 路径 + --history 开关。
+#   # TODO 待实调验证：该结论在 business-risk 模块验证过，business-info 模块是同一套
+#   #      后端的同一命名模式，但尚未实调；若 base 不存在，需回退为 _list 路径。
+#
+# 响应结构：spec 只给出记录字段的 object_name，没给容器名。按本模块兄弟模块的实测
+#   ({list, totalCount}) 推断为 data.list。  # TODO 待实调验证 每条均是
+#
+# 入参约定：凡是按企业查的命令，都接受信用代码或企业精确全名，经 wy-enterprise 归一化；
+#   按园区名 / 招投标 id 查的命令不走归一化。
+
+module: business-info
+
+endpoints:
+  # ══════════════════ 招投标 ══════════════════
+
+  # default_fields 取公告类型/项目名/中标单位/预算控制价/发布时间/uId —— 「参与过什么项目、
+  # 是招标还是中标、多大金额、多久前」；uId 是调 bid-text 取正文的钥匙所以保留。
+  # 公告类型码用 transforms 映射成人话（10 拟建 20 招标 30 中标）
+  - noun: bizinfo
+    verb: bid
+    path: /openapi/enterprise/bidding_info
+    summary: 招投标公告（全网公告库：拟建/招标/中标，含项目、预算、中标单位）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      title:
+        desc: 按公告标题关键词筛选
+      publishTimeStart:
+        flag: since
+        desc: 发布时间下限，如 2023-01-01
+      publishTimeEnd:
+        flag: until
+        desc: 发布时间上限
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: &resolve-enterprise
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      title: title
+      publishTimeStart: publishTimeStart
+      publishTimeEnd: publishTimeEnd
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [noticeType, projectName, winnerCompany, projectBudgetMoney, publishTime, uId]
+      meta: [totalCount]
+      transforms:
+        - path: noticeTypeMain
+          as: noticeType
+          map:
+            "0": 未知
+            "10": 拟建公告
+            "20": 招标公告
+            "30": 中标公告
+
+  # default_fields 只取 contentText —— 这条命令就是为了拿正文；html 版进 --full
+  - noun: bizinfo
+    verb: bid-text
+    path: /openapi/enterprise/bidding_content
+    summary: 招投标公告正文（用 bid 结果里的 uId 查）
+    params:
+      uid:
+        required: true
+        positional: true
+        multi: true
+        desc: 招投标 id（bid 命令输出的 uId）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    result:
+      list: data.list   # TODO 待实调验证：也可能是单对象 item: data
+      coordinate: [uid]
+      default_fields: [contentText]
+      meta: [totalCount]
+
+  # default_fields 取标段名/成交金额/采购人/中标人/发布时间/采购方式 —— 「中了谁的什么标、
+  # 多少钱、多久前、怎么采的」；默认以成交供应商身份查（评估的是它作为供应商的履约记录），
+  # --as-buyer 翻成采购方身份。sellerName/purchaserName 都留着，两种身份下各有一个是对方
+  - noun: bizinfo
+    verb: won
+    path: /openapi/enterprise/zz-bidding-winning-info
+    summary: 中资平台招中标/成交记录（默认查其作为成交供应商，--as-buyer 查其作为采购方）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      companyIdentity:
+        type: bool
+        flag: as-buyer
+        default: false
+        desc: 以采购方身份查（默认查其作为成交供应商的记录）
+      publishStartDate:
+        flag: since
+        desc: 发布时间下限 YYYY-MM-DD
+      publishEndDate:
+        flag: until
+        desc: 发布时间上限 YYYY-MM-DD
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      companyIdentity: companyIdentity
+      publishStartDate: publishStartDate
+      publishEndDate: publishEndDate
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [biddingName, tradeAmount, purchaserName, sellerName, publishTime, purchaseType]
+      meta: [totalCount]
+
+  # default_fields 取标段名/采购方式/发布时间/开标时间/截止时间/详情链接 —— 这是企业作为
+  # 采购人发的招标公告，回答「它在采购什么、什么时候开标、还来得及投吗」；采购人就是本企业，
+  # 已在坐标里
+  - noun: bizinfo
+    verb: tender
+    path: /openapi/enterprise/zz-bidding-tender-announcement
+    summary: 中资平台招标公告（企业作为采购人发布的标）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      publishStartDate:
+        flag: since
+        desc: 发布时间下限 YYYY-MM-DD
+      publishEndDate:
+        flag: until
+        desc: 发布时间上限 YYYY-MM-DD
+      bidStartDate:
+        flag: bid-since
+        desc: 开标时间下限 YYYY-MM-DD
+      bidEndDate:
+        flag: bid-until
+        desc: 截止时间上限 YYYY-MM-DD
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      publishStartDate: publishStartDate
+      publishEndDate: publishEndDate
+      bidStartDate: bidStartDate
+      bidEndDate: bidEndDate
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [biddingName, purchaseType, publishTime, bidStartTime, bidEndTime, url]
+      meta: [totalCount]
+
+  # ══════════════════ 监管合规 ══════════════════
+
+  # default_fields 取检查类型/检查机关/日期/结果/结论 —— 抽查看「谁查的、查什么、什么时候、
+  # 过没过」；resultType 码用 transforms 映射成 通过/不通过/未知
+  - noun: bizinfo
+    verb: inspect
+    path: /openapi/enterprise/checkups
+    summary: 抽查检查结果（工商公示：检查机关、类型、日期、通过与否）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录而非当前公示
+      resultType:
+        flag: result
+        desc: 结果筛选 1 通过 0 不通过 -1 未知
+      dateStart:
+        flag: since
+        desc: 检查日期下限
+      dateEnd:
+        flag: until
+        desc: 检查日期上限
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      resultType: resultType
+      dateStart: dateStart
+      dateEnd: dateEnd
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [type, department, date, result, verdict]
+      meta: [totalCount]
+      transforms:
+        - path: resultType
+          as: verdict
+          map:
+            "1": 通过
+            "0": 不通过
+            "-1": 未知
+
+  # default_fields 取任务名/抽查类型/抽查机关/完成日期/详情 —— 双随机抽查的结论在 details
+  # 列表里，没有它答不了「查出问题没有」；计划/任务编号是内部 id，去掉
+  - noun: bizinfo
+    verb: random-inspect
+    path: /openapi/enterprise/double_checkups
+    summary: 双随机抽查结果（工商公示：抽查任务、类型、机关、日期、详情）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录而非当前公示
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send: &send-paged
+      creditCode: socialCreditCode
+      isHistory: history
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [raninsTaskName, raninsTypeName, insAuth, insDate, details]
+      meta: [totalCount]
+
+  # default_fields 取许可名称/文件编号/许可机关/有效期自/有效期至/状态 —— 资质类的标准答案
+  # 「有什么许可、谁发的、到期没有、还有效吗」；许可内容正文进 --full
+  - noun: bizinfo
+    verb: license
+    path: /openapi/enterprise/license_info
+    summary: 行政许可/资质（工商公示：许可名称、编号、机关、有效期、状态）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录（已注销/过期）而非当前有效
+      statusCode:
+        type: int
+        flag: status
+        desc: 状态码筛选 1 注销 2 正常 3 有效 4 无效 5 撤销 6 异议 7 吊销 8 变更 -1 其他
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      statusCode: statusCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [name, number, department, startDate, endDate, status]
+      meta: [totalCount]
+
+  # default_fields 取登记机关/公告期/注销结果/异议信息 —— 简易注销看「在不在走注销、
+  # 公告期到几时、有没有人提异议、结果如何」；命中通常是供应商准入的否决项
+  - noun: bizinfo
+    verb: simple-cancel
+    path: /openapi/enterprise/simple_cancellation_announcement
+    summary: 简易注销公告（登记机关、公告期、异议、注销结果）——命中意味着企业正在退出
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [department, noticePeriod, gsScaResult, gsScaObjections]
+      meta: [totalCount]
+
+  # ══════════════════ 税务 / 海关 ══════════════════
+
+  # default_fields 取纳税人资格/是否具有资格/认定日期/有效期起止/纳税人状态 —— 开票能力的
+  # 直接证据：「是不是一般纳税人、什么时候认定的、还在有效期吗、户还正常吗」
+  - noun: bizinfo
+    verb: taxpayer
+    path: /openapi/enterprise/general_taxpayer
+    summary: 一般纳税人资格（资格、认定日期、有效期、纳税人状态）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [qualification, hasQualific, judgeDate, startDate, endDate, state]
+      meta: [totalCount]
+
+  # default_fields 取年份/企业名 —— 接口本身只有 4 个字段，回答「哪几年是纳税 A 级」
+  # 只需要年份；name 留着用于确认主体，注册号与坐标重复去掉
+  - noun: bizinfo
+    verb: tax-rating
+    path: /openapi/enterprise/pay_taxes
+    summary: 纳税信用 A 级记录（哪些年度被评为 A 级）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      year:
+        desc: 只看某一年度，如 2023
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      year: year
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [year, name]
+      meta: [totalCount]
+
+  # default_fields 取海关编号/经营类别/注册日期/报关有效期/海关评级/注销标志 —— 进出口能力看
+  # 「有没有海关登记、什么类别、还有效吗、信用评级、注销了没」；行政区划/英文名/处罚数组进 --full
+  # TODO 待实调验证：hgLevel 与 creditLevelsNew 哪个实际有值（二者都标「信用等级」）
+  - noun: bizinfo
+    verb: customs
+    path: /openapi/enterprise/creditimportexport_data
+    summary: 海关进出口登记（海关编号、经营类别、注册日期、有效期、海关评级）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [customsNum, businessCategory, regDate, vailDate, hgLevel, cancelFlag]
+      meta: [totalCount]
+
+  # ══════════════════ 规模 ══════════════════
+
+  # default_fields 取职位/工作地点/薪资/招聘人数/企业规模/发布日期 —— 招聘是经营活跃度与
+  # 规模的旁证：「还在招人吗、招多少、在哪、什么待遇、公司多大」；职位描述/技能要求长文本进 --full
+  - noun: bizinfo
+    verb: hiring
+    path: /openapi/enterprise/new_jobs
+    summary: 招聘信息（职位、地点、薪资、人数、企业规模、发布日期）——经营活跃度与规模旁证
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史招聘而非当前在招
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [titleAbbr, location, salary, number, size, date]
+      meta: [totalCount]
+
+  # ══════════════════ 园区 ══════════════════
+
+  # default_fields 取园区名/省/市/面积/地址/产业集群 —— 园区画像：「在哪、多大、主打什么产业」；
+  # 经纬度/多边形范围/描述长文本进 --full。参数名用 park 而不是 name，避免与返回行的 name 打架
+  - noun: bizinfo
+    verb: park
+    path: /openapi/enterprise/whole_park
+    summary: 园区信息（按园区名查：省市、面积、地址、产业集群）
+    params:
+      park:
+        required: true
+        positional: true
+        multi: true
+        desc: 园区名称
+      history:
+        type: bool
+        default: false
+        desc: 查历史信息而非当前
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    send:
+      name: park
+      isHistory: history
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [park]
+      default_fields: [name, province, city, area, address, industryCollect]
+      meta: [totalCount]
+
+  # default_fields 取园区名/省/市/区/地址/产业集群 —— 「这家企业落在哪个园区、园区主打什么」，
+  # 用于判断产业配套；spec 里园区字段与关联字段重复列出，取一份即可
+  - noun: bizinfo
+    verb: park-of
+    path: /openapi/enterprise/belong_whole_park
+    summary: 企业所属园区（企业 → 园区：园区名、省市区、地址、产业集群）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史所属园区而非当前
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [name, province, city, district, address, industryCollect]
+      meta: [totalCount]
+
+  # default_fields 取企业名/园区名/市/区 —— 这条是「园区里有哪些企业」的名单，每行核心就是
+  # companyName；园区自身属性每行重复，只留市/区定位
+  - noun: bizinfo
+    verb: park-firms
+    path: /openapi/enterprise/whole_park_company
+    summary: 园区内企业名单（园区 → 企业，按园区名查）
+    params:
+      park:
+        required: true
+        positional: true
+        multi: true
+        desc: 园区名称
+      history:
+        type: bool
+        default: false
+        desc: 查历史入驻企业而非当前
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    send:
+      name: park
+      isHistory: history
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list   # TODO 待实调验证
+      coordinate: [park]
+      default_fields: [companyName, name, city, district]
+      meta: [totalCount]

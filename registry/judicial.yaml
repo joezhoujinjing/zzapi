@@ -1,0 +1,812 @@
+# 司法风险（judicial）—— 案件明细：在打什么官司、涉案多少钱、被执行多少、有没有破产
+#
+# 「有没有」看 enterprise risk（38 项扇出里含本模块 7 个稀疏强信号：被执行 / 失信 / 限高 /
+# 破产 / 司法拍卖 / 询价评估 / 违建）；「具体什么案子、多少钱、本企业什么角色」看这里的明细。
+# 体检 vs 明细互补，与 bizrisk 同一模式。不再单设 judicial check 体检入口——与 enterprise risk 重复。
+#
+#   judicial executed     <企业>  被执行人（执行标的金额 / 执行状态）        --history
+#   judicial dishonest    <企业>  失信被执行人（标的 / 履行情况）            --history
+#   judicial restricted   <企业>  限制高消费（被限制人 / 申请执行人 / 案由）  --history
+#   judicial hearing      <企业>  开庭公告（案由 / 开庭日期 / 当事人身份）    --history
+#   judicial judgment     <企业>  裁判文书（案由 / 胜败诉 / 请求标的）        --history
+#   judicial notice       <企业>  法院公告（类型 / 案由 / 当事人）            --history
+#   judicial case         <企业>  立案信息（案号 / 角色 / 状态 / 立案时间）
+#   judicial auction      <企业>  司法拍卖（起拍价 / 成交价 / 拍卖日期）
+#   judicial bankruptcy   <企业>  破产 / 强制清算案件
+#   judicial appraisal    <企业>  询价评估（执行财产的询价 / 评估结果）
+#   judicial construction <企业>  违法违规建设
+#   judicial causes       <企业>  裁判文书案由清单（1 次调用看清诉讼画像）
+#
+# 入参统一用 <target>：信用代码或精确企业全名都行，先经 wy-enterprise 归一化成 creditCode，
+# 坐标因此每行带 creditCode + companyName（同 enterprise risk/cert）。
+#
+# _list / _history 的折叠（6 对 → 6 条命令 + --history）：
+#   同平台 business-risk 模块已实测「base = 全集、_list ≡ isHistory:0、_history ≡ isHistory:1」；
+#   判决/被执行/限高三个 base 路径（executedpersons / executions / restricted_consumer）在
+#   分支 feat/judicial-and-info 上也实测可用。故这里一律声明 base 路径 + `isHistory: history`，
+#   --history 默认关 → 只看当前在册。开庭/文书/公告三个 base（kaitinggonggaos /
+#   lawsuits_rolerelations / notices）本次也已实调确认存在且接受 isHistory。
+#
+# 量级（8 家样本合计）：被执行 74 · 违法建设 14 · 司法拍卖 10 · 失信/限高/破产/询价 0
+#   —— 稀疏，命中即有意义，已进 enterprise risk 扇出；
+#   开庭 646 · 立案 473 · 文书 339 · 公告 53 —— 家家都有、动辄上百，是常态数据不是风险命中，
+#   不进任何体检扇出，只走这里的明细命令（meta.totalCount 给条数）。
+#   这四类都带 role/pureRole/cleanRole（原告 / 被告 / 申请人 …）：当原告不是风险，
+#   默认字段一定带角色，免得把主动维权的公司当成高风险。
+#
+# 返回形状（实测 2026-08-20，样本恒大地产集团）：12 个分页接口都是
+# {list, totalCount, pageNum, pageSize, dataCnt}（list: data.list，meta 取 totalCount）；
+# lawsuits_case_cause 例外，是裸数组 data。恒大：被执行 350 / 文书 2987 / 公告 314 / 询价 19 / 违建 1 / 破产 0。
+# pageSize 平台上限 20，设 max 拦下；默认 5 条——meta.totalCount 已给总数，要更多用 --limit/--page。
+# 时间范围参数（dateType/caseDateType/filingDateType/hearingDateType/startDateType）
+# 语义相同，CLI 统一叫 --recent 1|2|3（最近 6 个月 / 1 年 / 2 年）。
+#
+# 案由码表的取舍：lawsuits_case_cause / restricted_case_reason 都要 creditCode，返回的是
+# 「这家企业」的案由去重列表，是按企业聚合的事实数据而不是全局码表，做不成 ref 那样的本地表。
+#   - lawsuits_case_cause → 独立 verb `causes`：文书动辄几十上百条翻不完，一次调用拿到案由清单
+#     就能回答「主要打什么官司」，输出极小，值一个 verb
+#   - restricted_case_reason 不收：限高本身稀疏（样本 0 条），`restricted` 的默认字段已带
+#     caseReason，再给一个「限高案由清单」没有能回答的新问题，只会多一个让 agent 选错的命令
+
+module: enterprise-judicial-risk
+
+endpoints:
+  # ——————————————————————————————————————————————————————————
+  # 被执行人（executedpersons_list / _history 折叠）
+  # default_fields 取 被执行人/案号/法院/执行标的/立案时间/执行状态 —— 尽调关心
+  # 「有没有、多大、多久前、结没结」；name 用来分辨被执行的是本企业还是关联个人。
+  # 去掉 caseId/pid/pEid（内部 id）、type（name 已可见）、isHistory（是入参）。
+  - noun: judicial
+    verb: executed
+    path: /openapi/enterprise/executedpersons
+    summary: 被执行人记录（执行标的金额 / 执行状态）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史被执行记录而非当前在册
+      status:
+        type: int
+        min: 0
+        max: 1
+        desc: 执行状态 0-执行中 1-已结案；不给查全部
+      caseDateType:
+        type: int
+        flag: recent
+        min: 1
+        max: 3
+        desc: 只看最近 1-6 个月 2-1 年 3-2 年立案的
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      isHistory: history
+      status: status
+      caseDateType: caseDateType
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [name, caseNumber, court, amount, caseDate, status]
+      meta: [totalCount]
+      transforms:
+        - path: status
+          map:
+            "0": 执行中
+            "1": 已结案
+
+  # ——————————————————————————————————————————————————————————
+  # 失信被执行人（executions_list / _history 折叠）
+  # default_fields 取 当事人/案号/法院/标的/立案时间/履行情况 —— 「欠多少、欠多久、履行了没」。
+  # finalDuty/executionDesc 是长文本，放 --full；operName/sex/age/province 对判断无用。
+  - noun: judicial
+    verb: dishonest
+    path: /openapi/enterprise/executions
+    summary: 失信被执行人记录（标的金额 / 履行情况）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史失信记录而非当前在册
+      executionStatus:
+        type: int
+        flag: status
+        desc: 履行情况 1-全部未履行 2-部分未履行 99-其他；不给查全部
+      dateType:
+        type: int
+        flag: recent
+        min: 1
+        max: 3
+        desc: 只看最近 1-6 个月 2-1 年 3-2 年立案的
+      caseNumber:
+        flag: case-no
+        desc: 按案号过滤
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      isHistory: history
+      executionStatus: executionStatus
+      dateType: dateType
+      caseNumber: caseNumber
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [name, caseNumber, court, amount, date, executionStatus]
+      meta: [totalCount]
+
+  # ——————————————————————————————————————————————————————————
+  # 限制高消费（restricted_consumer_list / _history 折叠）
+  # default_fields 取 被限制人/案号/法院/案由/立案时间/申请执行人 —— 限高没有金额，
+  # 关键是「谁被限、因为什么案子、谁申请的、多久前」。content 是原文全文，放 --full；
+  # courtCode/各种 eid 是内部码。注意记录里的 companyName（关联企业）会覆盖坐标里的同名键，
+  # 两者通常就是同一家。
+  - noun: judicial
+    verb: restricted
+    path: /openapi/enterprise/restricted_consumer
+    summary: 限制高消费记录（被限制人 / 申请执行人 / 案由）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史限高记录而非当前在册
+      caseNo:
+        flag: case-no
+        desc: 按案号过滤
+      caseReason:
+        flag: cause
+        desc: 按案由过滤
+      filingDateType:
+        type: int
+        flag: recent
+        min: 1
+        max: 3
+        desc: 只看最近 1-6 个月 2-1 年 3-2 年立案的
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      isHistory: history
+      caseNo: caseNo
+      caseReason: caseReason
+      filingDateType: filingDateType
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [name, caseNo, court, caseReason, filingDate, executionApplicant]
+      meta: [totalCount]
+
+  # ——————————————————————————————————————————————————————————
+  # 开庭公告（kaitinggonggaos_list / _history 折叠）
+  # default_fields 取 案号/案由/法院/开庭日期/当事人身份 —— 「在打什么官司、
+  # 什么时候开庭、本企业是原告还是被告」。pureRole 必须默认可见：原告不是风险。
+  # content/title/judge/tribunal/url 等放 --full。实测 relatedCompanies 是 JSON 字符串（各方 name/pure_role），
+  # 单条 380B+，占整行 3/4，默认不出；「对面是谁」用 --fields relatedCompanies 或 --full。
+  - noun: judicial
+    verb: hearing
+    path: /openapi/enterprise/kaitinggonggaos
+    summary: 开庭公告（案由 / 开庭日期 / 本企业当事人身份）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史公告而非当前
+      pureRole:
+        type: int
+        flag: role
+        desc: 只看本企业身份为 1-被告 2-原告 3-被申请人 4-申请人 5-被上诉人 6-上诉人 7-第三人 8-被执行人 99-其他
+      caseNo:
+        flag: case-no
+        desc: 按案号过滤
+      hearingDateType:
+        type: int
+        flag: recent
+        min: 1
+        max: 3
+        desc: 只看最近 1-6 个月 2-1 年 3-2 年开庭的
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      isHistory: history
+      pureRole: pureRole
+      caseNo: caseNo
+      hearingDateType: hearingDateType
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [caseNo, caseReason, court, hearingDate, pureRole]
+      meta: [totalCount]
+
+  # ——————————————————————————————————————————————————————————
+  # 裁判文书（lawsuits_rolerelations_list / _history 折叠）
+  # default_fields 取 案号/案由/标准角色/案件类型/判决时间/请求标的 —— 「打的什么官司、
+  # 本企业什么身份、民事还是执行、多久前、争多少钱」。实测 trialResult 是码（99/10，无对照表）
+  # 故不出，type 是人话（民事案件/执行案件）故用 type 不用 caseType 码；subAmount 常为 0，
+  # 冻结金额在 freezingInfo、判决主文在 judgeresult（长文本）——都放 --full。court 已编码在案号里。
+  - noun: judicial
+    verb: judgment
+    path: /openapi/enterprise/lawsuits_rolerelations
+    summary: 裁判文书（案由 / 胜败诉 / 请求标的）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史文书而非当前
+      cleanRole:
+        type: int
+        flag: role
+        desc: 只看本企业身份为 1-被告 2-原告 3-申请人 4-被申请人 5-上诉人 6-被上诉人 7-第三人 8-被执行人 99-其他
+      causeAction:
+        flag: cause
+        desc: 按案由过滤（取值可先用 judicial causes 看）
+      caseType:
+        flag: type
+        desc: 案件类型（民事/刑事/行政/执行等，取值见平台「裁判文书案件类型」）
+      caseNo:
+        flag: case-no
+        desc: 按案号过滤
+      dateType:
+        type: int
+        flag: recent
+        min: 1
+        max: 3
+        desc: 只看最近 1-6 个月 2-1 年 3-2 年的
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      isHistory: history
+      cleanRole: cleanRole
+      causeAction: causeAction
+      caseType: caseType
+      caseNo: caseNo
+      dateType: dateType
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [caseNo, caseCause, cleanRole, type, date, subAmount]
+      meta: [totalCount]
+
+  # ——————————————————————————————————————————————————————————
+  # 法院公告（notices_list / _history 折叠）
+  # default_fields 取 标准类型/案由/当事人/当事人身份/公告时间/法院 —— 公告类型（起诉状副本送达、
+  # 开庭传票、拍卖公告、破产文书…）本身就是信号强弱的区分；role 区分原被告。
+  # content/contentOri/peopleOri/relationDetails 放 --full。
+  - noun: judicial
+    verb: notice
+    path: /openapi/enterprise/notices
+    summary: 法院公告（公告类型 / 案由 / 当事人身份）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史公告而非当前
+      typeCode:
+        type: int
+        flag: type
+        desc: 公告类型代码（取值见平台「法院公告类型」）
+      role:
+        type: int
+        desc: 只看本企业身份为 1-被告 2-原告 3-被申请人 4-申请人 5-被上诉人 6-上诉人 7-第三人 8-被执行人 9-被申诉人 99-其他
+      dateType:
+        type: int
+        flag: recent
+        min: 1
+        max: 3
+        desc: 只看最近 1-6 个月 2-1 年 3-2 年的
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      isHistory: history
+      typeCode: typeCode
+      role: role
+      dateType: dateType
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [typeName, caseReason, people, role, date, court]
+      meta: [totalCount]
+
+  # ——————————————————————————————————————————————————————————
+  # 立案信息
+  # default_fields 取 案号/法院/角色/案件状态/立案时间 —— 「有几个案子在审、
+  # 本企业是原告还是被告、多久前立的」。开庭日期在 hearing 里看；法官/地区不必默认出。
+  # relatedCompanies（各方当事人，JSON 数组）实测单条 300B+，占整行 3/4，默认不出——
+  # 「对面是谁」用 --fields relatedCompanies 或 --full 再看。
+  - noun: judicial
+    verb: case
+    path: /openapi/enterprise/cases
+    summary: 立案信息（案号 / 本企业角色 / 案件状态 / 立案时间）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      caseStatus:
+        flag: status
+        desc: 案件状态（取值见平台文档）
+      startDate:
+        flag: from
+        desc: 立案时间起（yyyy-MM-dd）
+      endDate:
+        flag: to
+        desc: 立案时间止（yyyy-MM-dd）
+      startDateType:
+        type: int
+        flag: recent
+        min: 1
+        max: 3
+        desc: 只看最近 1-6 个月 2-1 年 3-2 年立案的
+      caseNo:
+        flag: case-no
+        desc: 按案号过滤（平台文档写「案由编号」，按同组接口惯例应为案号）   # TODO 待实调验证
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      caseStatus: caseStatus
+      startDate: startDate
+      endDate: endDate
+      startDateType: startDateType
+      caseNo: caseNo
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [caseNo, court, role, caseStatus, startDate]
+      meta: [totalCount]
+
+  # ——————————————————————————————————————————————————————————
+  # 司法拍卖
+  # default_fields 取 本企业角色/拍卖品/法院/拍卖日期/起拍价/交易价格 —— 「是谁的资产被拍、
+  # 拍的什么、值多少、成交没」。role 必须默认出：本企业可能只是关联方而非被处置方。
+  # description/_restrict/certificate/basis 是长文本，放 --full。
+  - noun: judicial
+    verb: auction
+    path: /openapi/enterprise/auctions_relations
+    summary: 司法拍卖（拍卖品 / 起拍价 / 成交价）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [role, name, court, date, startPrice, transactionPrice]
+      meta: [totalCount]
+
+  # ——————————————————————————————————————————————————————————
+  # 破产 / 强制清算案件
+  # default_fields 取 案号/法院/被申请人/申请人/案件类别/公开时间 —— 「谁申请谁破产、
+  # 是破产还是强制清算、多久前」。caseKind 码映射成人话（1/2/6/7 破产，3/4/5/8 强制清算）。
+  # 各种 eid / 管理人信息放 --full。
+  - noun: judicial
+    verb: bankruptcy
+    path: /openapi/enterprise/t_bankruptcy_new
+    summary: 破产 / 强制清算案件
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [caseNo, court, name, appName, caseKindName, pubDate]
+      meta: [totalCount]
+      transforms:
+        - path: caseKind
+          as: caseKindName
+          map:
+            "1": 破产案件
+            "2": 破产案件
+            "6": 破产案件
+            "7": 破产案件
+            "3": 强制清算
+            "4": 强制清算
+            "5": 强制清算
+            "8": 强制清算
+
+  # ——————————————————————————————————————————————————————————
+  # 询价评估（执行程序中对被执行人财产的询价 / 评估）
+  # default_fields 取 案号/法院/标的物/财产类型/询价结果/发布日期 —— 「哪个案子、什么财产、
+  # 评了多少」。实测 result 是 JSON 字符串（含 price），pubDate 可能为空（此时看 lotteryTime）；
+  # content/pdf/url 放 --full；各种码不出。
+  - noun: judicial
+    verb: appraisal
+    path: /openapi/enterprise/t_inquiry_evaluation
+    summary: 询价评估（执行财产的询价 / 评估结果）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [caseNo, courtName, subjectMatter, propertyKind, result, pubDate]
+      meta: [totalCount]
+
+  # ——————————————————————————————————————————————————————————
+  # 违法违规建设
+  # default_fields 取 责任单位/项目名称/存在问题/清理措施/是否完成/拟完成时限 ——
+  # 「哪个项目、违了什么、怎么处理、整改了没、期限到没到」。省市区/码不默认出。
+  - noun: judicial
+    verb: construction
+    path: /openapi/enterprise/t_illegal_construction
+    summary: 违法违规建设记录
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [creditCode, companyName]
+      default_fields: [accountUnit, entryName, existQuestion, cleanAction, executionOriginal, quasiCompleteTimeLimit]
+      meta: [totalCount]
+
+  # ——————————————————————————————————————————————————————————
+  # 裁判文书案由清单：spec 只有一个字段 causeAction，默认就全出（诉讼画像一眼看完）
+  - noun: judicial
+    verb: causes
+    path: /openapi/enterprise/lawsuits_case_cause
+    summary: 裁判文书案由清单（一次调用看清在打什么类型的官司）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      cleanRole:
+        type: int
+        flag: role
+        desc: 只看本企业身份为 1-被告 2-原告 3-申请人 4-被申请人 5-上诉人 6-被上诉人 7-第三人 8-被执行人 99-其他
+      caseType:
+        flag: type
+        desc: 案件类型（取值见平台「裁判文书案件类型」）
+      dateType:
+        type: int
+        flag: recent
+        min: 1
+        max: 3
+        desc: 只看最近 1-6 个月 2-1 年 3-2 年的
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 5
+        min: 1
+        max: 20
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: creditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: creditCode
+      cleanRole: cleanRole
+      caseType: caseType
+      dateType: dateType
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data                 # 实测：裸数组 [{causeAction}]，pageSize 仍生效
+      coordinate: [creditCode, companyName]
+      default_fields: [causeAction]

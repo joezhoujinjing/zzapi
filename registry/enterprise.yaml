@@ -1,8 +1,10 @@
 # 企业（enterprise）
 #
-# 两条命令：
+# 四条命令：
 #   enterprise search <关键词>   模糊搜企业，拿信用代码
-#   enterprise risk   <代码或全名>  并发扇出 17 项风险检查，默认只列命中
+#   enterprise risk   <代码或全名>  并发扇出 38 项风险检查，默认只列命中
+#   enterprise cert   <代码或全名>  供应商分级认证证书
+#   enterprise info   <代码或全名>  工商基本信息（含关联失信/被执行数）
 #
 # 实测记录（与文档不一致处，一律以实测为准）：
 #   - enterprise/search 的企业名字段是 companyName，文档写的 name 是错的
@@ -53,7 +55,7 @@ endpoints:
   # ——————————————————————————————————————————————————————————
   - noun: enterprise
     verb: risk
-    summary: 企业风险体检——并发查 17 项名单，默认只列命中项
+    summary: 企业风险体检——并发查 38 项名单，默认只列命中项
     params:
       target:
         required: true
@@ -71,7 +73,7 @@ endpoints:
         min: 1
         max: 3
         desc: 制裁清单档位 1-制裁名单 2-出口管制 3-不可靠实体
-    # 先归一化：15 个接口要代码，2 个要企业名，用户通常只有其一
+    # 先归一化：36 个接口要代码，2 个要企业名，用户通常只有其一
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -95,6 +97,14 @@ endpoints:
           as:
             riskScore: shellRiskScore
             scoreLevel: shellRiskLevel
+        # 关联方风险计数：不是本企业的记录，38 项体检一条都看不到。
+        # 「本企业干净，但关联着 4 家失信企业」是准入判断的关键信息。
+        - path: /openapi/enterprise/wy-enterprise
+          params: { creditCode: socialCreditCode }
+          item: data
+          as:
+            relationPromiseNum: relatedDishonestCount
+            relationExecutorsNum: relatedExecutedCount
       targets:
         # —— 司法 ——
         - category: 司法
@@ -270,6 +280,61 @@ endpoints:
           default_fields: [name, court, caseNoTerminal, caseNoOrigin, filingDate, terminateDate, amount, failPerformAmount]
           note: 先看 name 是不是本企业（可能是关联公司）
 
+        # —— 司法（来自 enterprise-judicial-risk，只收稀疏强信号）——
+        # 开庭公告/案件/诉讼角色不在此列：实测 8 家合计 646/473/339 条，
+        # 家家都有、动辄上百，属常态数据而非风险命中，塞进「只列命中」的
+        # 扇出会把真信号淹没；且它们带 role（原告/被告/申请人），当原告不是风险。
+        # 明细与条数走 judicial hearing / case / judgment / notice（meta.totalCount）。
+        # 字段名以 registry/judicial.yaml 的实测为准（样本恒大地产集团）。
+        - category: 司法
+          label: 被执行人
+          path: /openapi/enterprise/executedpersons
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [name, caseNumber, court, amount, caseDate, status]
+          note: 被执行人 ≠ 失信被执行人；有执行案件不等于拒不履行。先看 name 是否本企业，再看 status 是否已结案
+        - category: 司法
+          label: 失信被执行人（司法公示）
+          path: /openapi/enterprise/executions
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [name, caseNumber, court, amount, date, executionStatus]
+          note: 与「失信被执行人」(risk/sxbzx) 为同一事项的另一条数据管线，本条带标的金额与履行情况；两者可能同时命中
+        - category: 司法
+          label: 限制高消费
+          path: /openapi/enterprise/restricted_consumer
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [name, caseNo, court, caseReason, filingDate, executionApplicant]
+          note: name 是被限制的自然人（通常是法定代表人），companyName 是其关联企业
+        - category: 司法
+          label: 破产重整
+          path: /openapi/enterprise/t_bankruptcy_new
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [caseNo, court, name, appName, caseKind, pubDate]
+          note: 先看 name（被申请人）是不是本企业——本企业也可能是申请人。命中且为被申请人，准入通常硬否决
+        - category: 司法
+          label: 司法拍卖
+          path: /openapi/enterprise/auctions_relations
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [role, name, court, date, startPrice, transactionPrice]
+          note: 看 role——本企业可能是拍品所有人（资产被处置），也可能只是关联方
+        - category: 司法
+          label: 询价评估
+          path: /openapi/enterprise/t_inquiry_evaluation
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [caseNo, courtName, subjectMatter, propertyKind, result, pubDate]
+          note: 执行程序中对财产的询价/评估，意味着已进入财产处置阶段
+        - category: 处罚
+          label: 违法建设
+          path: /openapi/enterprise/t_illegal_construction
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [accountUnit, entryName, existQuestion, cleanAction, executionOriginal, quasiCompleteTimeLimit]
+
         # —— 担保（自愿融资担保，不必然是负面，但需看主体）——
         - category: 担保
           label: 股权出质
@@ -347,3 +412,37 @@ endpoints:
           map:
             "1": 已认证
             "0": 未认证
+
+  # ——————————————————————————————————————————————————————————
+  - noun: enterprise
+    verb: info
+    path: /openapi/enterprise/wy-enterprise
+    summary: 工商基本信息（含关联失信/被执行数）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+    result:
+      # wy-enterprise 的 data 是单对象不是数组，用 item
+      item: data
+      coordinate: [socialCreditCode, companyName, target]
+      # relationPromiseNum/relationExecutorsNum 是关联方风险计数，
+      # 38 项体检看不到——它们不是本企业的记录，而是关联企业的
+      default_fields:
+        [companyName, creditCode, status, operName, title, econKind, registCapi, actualCapi,
+         startDate, checkDate, belongOrg, industryName, address, contactNumber, contactEmail,
+         relationPromiseNum, relationExecutorsNum, scope]
