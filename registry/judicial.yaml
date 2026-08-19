@@ -90,10 +90,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -162,10 +162,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -231,10 +231,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -261,9 +261,10 @@ endpoints:
 
   # ——————————————————————————————————————————————————————————
   # 开庭公告（kaitinggonggaos_list / _history 折叠）
-  # default_fields 取 案号/案由/法院/开庭日期/当事人身份/当事人 —— 「在打什么官司、
-  # 什么时候开庭、本企业是原告还是被告、对面是谁」。pureRole 必须默认可见：原告不是风险。
-  # content/title/judge/tribunal/url 等放 --full。实测 relatedCompanies 是 JSON 字符串（各方 name/pure_role）。
+  # default_fields 取 案号/案由/法院/开庭日期/当事人身份 —— 「在打什么官司、
+  # 什么时候开庭、本企业是原告还是被告」。pureRole 必须默认可见：原告不是风险。
+  # content/title/judge/tribunal/url 等放 --full。实测 relatedCompanies 是 JSON 字符串（各方 name/pure_role），
+  # 单条 380B+，占整行 3/4，默认不出；「对面是谁」用 --fields relatedCompanies 或 --full。
   - noun: judicial
     verb: hearing
     path: /openapi/enterprise/kaitinggonggaos
@@ -300,10 +301,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -325,7 +326,7 @@ endpoints:
     result:
       list: data.list
       coordinate: [creditCode, companyName]
-      default_fields: [caseNo, caseReason, court, hearingDate, pureRole, relatedCompanies]
+      default_fields: [caseNo, caseReason, court, hearingDate, pureRole]
       meta: [totalCount]
 
   # ——————————————————————————————————————————————————————————
@@ -376,10 +377,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -447,10 +448,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -477,8 +478,10 @@ endpoints:
 
   # ——————————————————————————————————————————————————————————
   # 立案信息
-  # default_fields 取 案号/法院/角色/案件状态/立案时间/对方当事人 —— 「有几个案子在审、
-  # 本企业是原告还是被告、对面是谁、多久前立的」。开庭日期在 hearing 里看；法官/地区不必默认出。
+  # default_fields 取 案号/法院/角色/案件状态/立案时间 —— 「有几个案子在审、
+  # 本企业是原告还是被告、多久前立的」。开庭日期在 hearing 里看；法官/地区不必默认出。
+  # relatedCompanies（各方当事人，JSON 数组）实测单条 300B+，占整行 3/4，默认不出——
+  # 「对面是谁」用 --fields relatedCompanies 或 --full 再看。
   - noun: judicial
     verb: case
     path: /openapi/enterprise/cases
@@ -516,10 +519,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -542,7 +545,7 @@ endpoints:
     result:
       list: data.list
       coordinate: [creditCode, companyName]
-      default_fields: [caseNo, court, role, caseStatus, startDate, relatedCompanies]
+      default_fields: [caseNo, court, role, caseStatus, startDate]
       meta: [totalCount]
 
   # ——————————————————————————————————————————————————————————
@@ -569,10 +572,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -617,10 +620,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -677,10 +680,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -724,10 +727,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -782,10 +785,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:

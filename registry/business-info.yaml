@@ -59,10 +59,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: &resolve-enterprise
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -114,10 +114,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     result:
       list: data.list   # TODO 待实调验证：也可能是单对象 item: data
       coordinate: [uid]
@@ -157,10 +157,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send:
       creditCode: socialCreditCode
@@ -209,10 +209,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send:
       creditCode: socialCreditCode
@@ -264,10 +264,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send:
       creditCode: socialCreditCode
@@ -315,10 +315,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send: &send-paged
       creditCode: socialCreditCode
@@ -360,10 +360,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send:
       creditCode: socialCreditCode
@@ -398,10 +398,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send:
       creditCode: socialCreditCode
@@ -436,10 +436,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send:
       creditCode: socialCreditCode
@@ -474,10 +474,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send:
       creditCode: socialCreditCode
@@ -512,10 +512,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send:
       creditCode: socialCreditCode
@@ -554,10 +554,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send: *send-paged
     result:
@@ -593,10 +593,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     send:
       name: park
       isHistory: history
@@ -633,10 +633,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve: *resolve-enterprise
     send: *send-paged
     result:
@@ -670,10 +670,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     send:
       name: park
       isHistory: history

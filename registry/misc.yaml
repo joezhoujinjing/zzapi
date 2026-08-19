@@ -43,10 +43,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -87,10 +87,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -131,10 +131,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -176,10 +176,10 @@ endpoints:
       limit:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     send:
       investName: investName
       pageNum: page
@@ -208,10 +208,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -290,10 +290,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -337,10 +337,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -387,10 +387,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -434,10 +434,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -490,10 +490,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 10
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -565,10 +565,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -620,10 +620,10 @@ endpoints:
         desc: 页码
       limit:
         type: int
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:

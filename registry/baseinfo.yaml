@@ -91,10 +91,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -174,10 +174,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -230,10 +230,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -288,10 +288,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -340,10 +340,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -386,10 +386,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -414,7 +414,9 @@ endpoints:
   # 变更与历史轨迹
   # ══════════════════════════════════════════════════════════════
 
-  # default_fields 取日期/事项/变更前/变更后 —— 一条变更记录就是这四件事；type 是字典码。
+  # default_fields 取日期/事项/变更后 —— 「什么时候、改了什么、改成了什么」；type 是字典码。
+  # beforeContent/afterContent 都是长文本（高管备案一条就是整份名单），实测 20 条默认输出
+  # 7KB 里大头是这两个字段；默认只出变更后，变更前用 --fields beforeContent 或 --full 再看。
   # 平台把日期区间标为必填，这里给宽区间默认值，agent 默认拿到全量，需要再收窄。
   - noun: company
     verb: changes
@@ -443,10 +445,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -466,7 +468,7 @@ endpoints:
     result:
       list: data.list   # TODO 待实调验证
       coordinate: [socialCreditCode, companyName, target]
-      default_fields: [changeDate, changeItem, beforeContent, afterContent]
+      default_fields: [changeDate, changeItem, afterContent]
       meta: [totalCount]
 
   # default_fields 取曾用名/变更时间 —— 「以前叫什么、什么时候改的」；formatName 是清洗副本，
@@ -490,10 +492,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -537,10 +539,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -583,10 +585,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -632,10 +634,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -677,10 +679,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -807,10 +809,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -863,10 +865,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -914,10 +916,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/wy-enterprise
       try_params:
@@ -993,10 +995,10 @@ endpoints:
       pageSize:
         type: int
         flag: limit
-        default: 20
+        default: 5
         min: 1
         max: 20
-        desc: 每页条数（平台上限 20）
+        desc: 每页条数，默认 5（总数看 meta.totalCount；平台上限 20）
     resolve:
       path: /openapi/enterprise/zz_eid
       try_params:
