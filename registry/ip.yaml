@@ -1,0 +1,1194 @@
+# 知识产权与资质证书（ip）
+#
+# 平台把「知识产权」分组塞了 85 个接口，其中真正的知产只有 5 个（专利/商标/著作权/域名），
+# 其余 80 个全是各行业的资质许可与认证。招采里它们是一回事：供应商技术实力佐证与
+# 资质加分项核验——「有多少专利、是不是高新、有没有 ISO、建筑资质几级、药品许可在不在」。
+#
+# 命令树（17 条，覆盖 84 个平台端点 + 复用 1 个地产组端点；医药广告 1 个端点平台侧不存在）：
+#   单接口（可翻页、带 totalCount——数量类问题看 meta.totalCount）：
+#     ip patent / trademark / trademark-detail / copyright / domain   知产四件套
+#     ip cert       资质证书总表（全类型一张表，先看这里）
+#     ip hightech   高新技术企业
+#     ip personnel  工程类专业人员资质（建造师等，按人一行，数量大）
+#   扇出（一个命令并发查一个行业的全部许可/认证，默认只列命中，--only 按分类缩小）：
+#     ip system / product / it / telecom / construction / env / medical / food / business
+#
+# 实测记录（2026-08-20，深圳市腾讯计算机系统有限公司 / 中国建筑第八工程局有限公司）：
+#   - 三个端点家族全部返回 data.list + totalCount/pageNum/pageSize，都认 pageSize（上限 20）
+#   - 文档只给 xxx_list / xxx_history 两个端点的，去掉后缀的 base 路径存在且认 isHistory
+#     （trademark_info / domains_alls / certificate_main / hightech_enterprises /
+#      building_engineering / financial / food_additives / food_product_license /
+#      telecom_licence 九个全部实调通过）
+#   - 全部 17 条命令都对真实企业跑过一遍，所有扇出目标 failed=0，唯一不存在的端点是
+#     医药类广告资质（1601013），已注释掉，见 ip medical
+#   - /openapi/<camel>/list 与 /openapi/enterprise/xxx_list 家族同样认 isHistory：
+#     0 = 在册，1 = 历史，不传 = 全量（managementSystem/list 实测 9 / 33 / 42）
+#   - trademark_detail 必须带企业 zzEid（wy-enterprise 的 id 字段），只给 regNumber 报 1001003
+#   - 所有接口都收 creditCode 或 companyName，但 companyName 须精确全名，
+#     故统一走 resolve 归一化，用户给代码或全名都行
+#
+# 字段取舍总则：知产不是核心尽调项，默认字段极简——名称 / 编号 / 日期 / 状态，
+# 外加一个能回答「是什么等级/范围」的字段；来源网址、内部 id、代理机构一律 --full。
+
+module: ip
+
+endpoints:
+  # ══════════════════════════════════════════════════════════════
+  # 知产四件套
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取专利名/类型/申请号/申请日/授权日/法律状态 —— 回答「有没有、是发明还是实用新型、授权了没」；数量看 meta.totalCount
+  - noun: ip
+    verb: patent
+    path: /openapi/enterprise/patents_info
+    summary: 专利列表（发明/实用新型/外观设计），数量看 meta.totalCount
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      type:
+        desc: 专利类型 fmzl-发明 syxx-实用新型 wgsj-外观设计（不传=全部）
+      history:
+        type: bool
+        default: false
+        desc: 查历史专利（已失效/转让）而非当前在册
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      type: type
+      isHistory: history
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [patentName, typeName, requestNumStandard, requestDate, authorizeDate, lastStatus]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取商标名/注册号/国际分类/申请日/状态/专用权到期 —— 回答「有没有注册商标、还有效吗、第几类」
+  - noun: ip
+    verb: trademark
+    path: /openapi/enterprise/trademark_info
+    summary: 商标列表（名称/国际分类/状态/专用权期限），数量看 meta.totalCount
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史商标而非当前在册
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [trademarkName, regNumber, typeNum, applyDate, trademarkStatus, endDate]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取商标名/分类/申请日/状态/专用权期限 + 流程与公告 —— 详情的价值就在 steps/notices（驳回、无效、异议都在里面）
+  # 单独成条的理由：输入是注册号而非企业，与列表的参数结构不同，无法用 variants 折叠
+  - noun: ip
+    verb: trademark-detail
+    path: /openapi/enterprise/trademark_detail
+    summary: 单个商标详情（流程节点/公告/商品服务），注册号来自 ip trademark 的 regNumber
+    params:
+      target:
+        required: true
+        positional: true
+        desc: 统一社会信用代码，或企业全名（必须精确）——接口要企业 ID 配合注册号
+      regNumber:
+        required: true
+        positional: true
+        multi: true
+        desc: 商标申请/注册号（ip trademark 输出的 regNumber）
+    # 接口要的 zzEid 是平台内部企业 ID，wy-enterprise 的 id 字段就是它
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        id: zzEid
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      zzEid: zzEid
+      regNumber: regNumber
+    result:
+      item: data
+      coordinate: [socialCreditCode, companyName, target, regNumber]
+      default_fields: [trademarkName, typeNum, applyDate, trademarkStatus, period, steps, notices]
+
+  # default_fields 取作品/软件名/类别/登记号/登记日/著作权人/类型 —— 回答「多少软著、登记了什么」；company 可能不是本企业（合作登记）
+  - noun: ip
+    verb: copyright
+    path: /openapi/enterprise/copyrights_relations
+    summary: 著作权登记（作品著作权 + 软件著作权），--type S 只看软著；数量看 meta.totalCount
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      type:
+        desc: P-作品著作权 S-软件著作权（不传=全部）
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      type: type
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [name, type, typeName, number, approvalDate, company]
+      meta: [totalCount, pageNum, pageSize]
+      transforms:
+        - path: type
+          map:
+            P: 作品著作权
+            S: 软件著作权
+
+  # default_fields 取域名/网站名/备案号/备案日/主办单位 —— 回答「官网是哪个、备案在谁名下」
+  - noun: ip
+    verb: domain
+    path: /openapi/enterprise/domains_alls
+    summary: 网站域名与 ICP 备案，数量看 meta.totalCount
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史备案而非当前在册
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [domain, siteName, number, checkDate, bodyName]
+      meta: [totalCount, pageNum, pageSize]
+
+  # ══════════════════════════════════════════════════════════════
+  # 资质总表 / 高新 / 人员
+  # ══════════════════════════════════════════════════════════════
+
+  # default_fields 取证书名/编号/发证日/有效期至/状态 —— 总表一行一证，回答「一共有哪些证、哪些快到期」；type 是字典码，靠 licenseName 认
+  - noun: ip
+    verb: cert
+    path: /openapi/enterprise/certificate_main
+    summary: 资质证书总表（全部类型一张表，先看这里），数量看 meta.totalCount
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      type:
+        desc: 证书类别字典码（如 060501 信息安全管理体系）；不传=全部
+      state:
+        desc: 证书状态码 1-正常 2-注销 3-过期 4-暂停 5-撤销 6-失效 7-未知
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书而非当前在册
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      type: type
+      stateCode: state
+      isHistory: history
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [licenseName, registerNo, validStart, validEnd, state]
+      meta: [totalCount, pageNum, pageSize]
+
+  # default_fields 取证书号/年份/级别/有效期起止/状态 —— 回答「是不是高新、国家级还是省级、到期没」
+  - noun: ip
+    verb: hightech
+    path: /openapi/enterprise/hightech_enterprises
+    summary: 高新技术企业认定（国家级/省级/市级），--history 看过期批次
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      level:
+        desc: 级别 01-国家级 02-省级 03-市级 04-县区级（不传=全部）
+      state:
+        desc: 状态码 1-有效 3-过期 5-撤销 7-未知
+      history:
+        type: bool
+        default: false
+        desc: 查历史认定（已过期批次）
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      level: level
+      stateCode: state
+      isHistory: history
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [registerNo, year, level, validStart, validEnd, state]
+      meta: [totalCount, pageNum, pageSize]
+      transforms:
+        - path: level
+          map:
+            "01": 国家级
+            "02": 省级
+            "03": 市级
+            "04": 县区级
+
+  # default_fields 取姓名/工种/证书名/证书号/有效期/状态 —— 按人一行；「有多少建造师」看 meta.totalCount（中建八局实测 2513 条）
+  # 单独成条而不进 construction 扇出的理由：行数极大，扇出只给一页 20 条且没有 totalCount，回答不了「多少人」
+  - noun: ip
+    verb: personnel
+    path: /openapi/proPerson/list
+    summary: 工程类专业人员资质（建造师/安全员等，一人一行），人数看 meta.totalCount
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录而非当前在册
+      page:
+        type: int
+        default: 1
+        min: 1
+        desc: 页码
+      limit:
+        type: int
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      pageNum: page
+      pageSize: limit
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [pname, workType, licenseName, registerNo, validEnd, state]
+      meta: [totalCount, pageNum, pageSize]
+
+  # ══════════════════════════════════════════════════════════════
+  # 行业扇出：每条命令 = 一个行业的全部许可/认证并发查一遍，默认只列命中
+  # 所有扇出共用同一套 params/resolve；目标一律 list: data.list，
+  # 发 creditCode + isHistory（默认 0 在册，--history 1 历史）
+  # ══════════════════════════════════════════════════════════════
+
+  # —— 体系认证：ISO9001/14001/45001/27001 等 + 服务认证，招采加分项最常问的一组 ——
+  - noun: ip
+    verb: system
+    summary: 管理体系认证（ISO9001/14001/45001/27001…）与服务认证，默认只列在册证书
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书（过期/撤销）而非当前在册
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: certType
+      targets:
+        # default_fields 取证书名/编号/认证依据(ISO 标准号)/发证机构/到期/状态 —— 回答「有哪几个体系、哪家发的、有效吗」
+        - category: 体系
+          label: 管理体系认证
+          path: /openapi/managementSystem/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, certificationBasis, agencyName, validEnd, state]
+          note: state=暂停/过期 的证书不算有效认证；ISO 标准号看 certificationBasis
+        # default_fields 取证书名/编号/服务领域/发证机构/到期/状态
+        - category: 服务
+          label: 服务认证
+          path: /openapi/service/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, serviceScope, agencyName, validEnd, state]
+
+  # —— 产品认证与生产许可：CCC / CESI / 自愿性认证 / 工业产品生产许可 / 特种设备 / 农药 ——
+  - noun: ip
+    verb: product
+    summary: 产品认证与生产许可（CCC/CESI/自愿性认证/IT安全/消防产品/工业产品生产许可/特种设备/农药），--only 强制认证,产品认证,生产许可
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书而非当前在册
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: certType
+      targets:
+        # default_fields 取证书名/编号/产品名/型号/到期/状态 —— 回答「哪些产品有 3C、还有效吗」
+        - category: 强制认证
+          label: CCC 产品认证
+          path: /openapi/ccc/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productName, model, validEnd, state]
+        # default_fields 取声明编号/产品类别/声明日/到期/状态 —— 自我声明是 3C 的替代路径
+        - category: 强制认证
+          label: CCC 自我声明
+          path: /openapi/enterprise/ccc_self_declaration_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, selfDeclarationNo, productType, selfDeclarationDate, endDate, selfDeclarationState]
+        # default_fields 取证书名/编号/产品名/型号/到期/状态
+        - category: 产品认证
+          label: CESI 产品认证
+          path: /openapi/enterprise/cesi_certification_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productName, model, validEnd, state]
+        # default_fields 取证书名/编号/认证项目/产品单元/到期/状态
+        - category: 产品认证
+          label: 自愿性工业产品认证
+          path: /openapi/industryVolunteer/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, renzhengItem, unitMain, validEnd, state]
+        # default_fields 取证书名/编号/产品/申请级别/到期/状态 —— 级别（EAL）是 IT 安全认证的核心
+        - category: 产品认证
+          label: IT 产品信息安全认证
+          path: /openapi/itSafe/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productName, applicationLevel, validEnd, state]
+        # default_fields 取证书名/编号/产品/型号/到期/状态 —— 消防产品强制认证
+        - category: 产品认证
+          label: 消防产品认证（灭火系统）
+          path: /openapi/firefightingSystem/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, product, productModel, validEnd, state]
+        # default_fields 取证书名/声明编号/产品/起止/状态
+        - category: 产品认证
+          label: 电器电子有害物质自我声明
+          path: /openapi/enterprise/e_self_declaration_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productionInfo, validStart, validEnd, state]
+        # default_fields 取证书名/编号/产品规格/到期/状态/发证机构 —— 工业产品生产许可证是制造类供应商的准入硬件
+        - category: 生产许可
+          label: 工业产品生产许可证
+          path: /openapi/industryProduce/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productModel, validEnd, state, issueUnit]
+        # default_fields 取证书名/编号/许可项目/许可范围/到期/状态 —— 特种设备制造/安装/检验许可
+        - category: 生产许可
+          label: 特种设备许可公示
+          path: /openapi/enterprise/special_equipment_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, licenseItem, licenseScope, validEnd, state]
+        # default_fields 取证书名/编号/产品名/类别/到期/状态
+        - category: 生产许可
+          label: 农药产品生产资质
+          path: /openapi/pesticideProduce/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productName, kind, validEnd, state]
+        # default_fields 取证书名/类别/起止/状态 —— 该表没有证书编号字段
+        - category: 生产许可
+          label: 农药生产企业资质
+          path: /openapi/pesticideProduceEnterprise/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, kind, validStart, validEnd, state]
+
+  # —— 软件 / IT 行业资质：软件企业、软件产品评估、ITSS/CS/DCMM、系统集成项目经理、电子认证、游戏审批 ——
+  - noun: ip
+    verb: it
+    summary: 软件与 IT 服务资质（软件企业证书/软件产品评估/ITSS/CS/DCMM/系统集成项目经理/电子认证/游戏审批），--only 软件,服务能力,人员,许可
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书而非当前在册
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: certType
+      targets:
+        # default_fields 取证书名/编号/起止/状态/发证机构 —— 「双软」之一，软件企业身份
+        - category: 软件
+          label: 软件企业证书
+          path: /openapi/enterprise/software_company_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, validStart, validEnd, state, issueUnit]
+        # default_fields 取证书名/编号/产品名/软件类型/到期/状态 —— 「双软」之二，软件产品登记
+        - category: 软件
+          label: 软件产品评估认证
+          path: /openapi/software/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productName, kind, validEnd, state]
+        # default_fields 取证书名/编号/级别/业务领域/到期/状态 —— IT 服务招标常见加分项，级别是关键
+        - category: 服务能力
+          label: ITSS 认证
+          path: /openapi/enterprise/itss_certificate_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, level, businessScope, validEnd, state]
+        # default_fields 取证书名/编号/级别/到期/状态 —— 信息系统建设和服务能力评估
+        - category: 服务能力
+          label: CS 认证
+          path: /openapi/enterprise/cs_certificate_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, level, validEnd, state]
+        # default_fields 取证书名/编号/评估等级/到期/状态 —— 数据管理能力成熟度
+        - category: 服务能力
+          label: DCMM 认证
+          path: /openapi/enterprise/dcmm_certificate_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, level, validEnd, state]
+        # default_fields 取姓名/证书名/等级/编号/首次获证/状态 —— 按人一行
+        - category: 人员
+          label: 系统集成项目经理
+          path: /openapi/computerProjectManager/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [name, licenseName, level, registerNo, validStart, state]
+        # default_fields 取证书名/许可证号/批准日/状态 —— 该表无到期字段
+        - category: 许可
+          label: 电子认证服务机构许可
+          path: /openapi/electronicCertificationAgency/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, validStart, state]
+        # default_fields 取游戏名/申请类别/批文号/出版单位/日期/状态
+        - category: 许可
+          label: 游戏审批
+          path: /openapi/game/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [gameName, appKind, registerNo, publishUnit, validStart, state]
+
+  # —— 通信行业：电信业务许可、码号资源、进网许可、无线电型号核准/进关核准 ——
+  - noun: ip
+    verb: telecom
+    summary: 通信行业许可（电信业务经营许可/码号资源审批/设备进网许可/无线电型号与进关核准），--only 业务许可,设备许可
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书而非当前在册
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: certType
+      targets:
+        # default_fields 取证书名/许可证号/业务种类/覆盖范围/到期/状态 —— 回答「ICP/IDC/ISP 哪种、全国还是省内」
+        # 文档只有 telecom_licence_list / _history；base 路径已实调存在并认 isHistory
+        - category: 业务许可
+          label: 电信业务经营许可
+          path: /openapi/enterprise/telecom_licence
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, professionKind, scope, validEnd, state]
+        # default_fields 取证书名/号码/批准用途/使用单位/状态 —— 该表无日期字段
+        - category: 业务许可
+          label: 电信网码号资源审批
+          path: /openapi/telecomApproval/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, approvalPurpose, telecomUser, state]
+        # default_fields 取证书名/编号/设备名/型号/到期/状态
+        - category: 设备许可
+          label: 电信设备进网许可
+          path: /openapi/networkLicense/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, equipmentName, equipmentModel, validEnd, state]
+        # default_fields 取证书名/核准证号/设备名/型号/到期/状态
+        - category: 设备许可
+          label: 无线电发射设备型号核准
+          path: /openapi/radioModelApprove/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productName, model, validEnd, state]
+        # default_fields 取证书名/批号/商品名/型号/到期/状态
+        - category: 设备许可
+          label: 无线电发射设备进关核准
+          path: /openapi/radioCustomsApprove/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productName, model, validEnd, state]
+
+  # —— 工程建设：建筑业资质、建筑工程资质、安防、电力、房地产开发、测绘、安全生产许可 ——
+  # 工程类供应商准入最常用的一组。建筑业企业资质证书（施工总承包/专业承包等级）来自地产组的
+  # /openapi/enterprise/building，这里作为扇出目标复用；要翻页/按类型过滤用 property building
+  - noun: ip
+    verb: construction
+    summary: 工程建设类资质（建筑业资质等级/建筑工程资质/安防工程/承装电力/房地产开发/测绘/安全生产许可证），--only 建筑,专项,安全
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书而非当前在册
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: certType
+      targets:
+        # default_fields 取证书名/资质名称(含总承包/专业承包等级清单)/证书号/到期/状态/发证机关 —— certName 一个字段就是「几级、哪些专业」
+        - category: 建筑
+          label: 建筑业企业资质
+          path: /openapi/enterprise/building
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, certName, registerNo, validEnd, state, issueUnit]
+          note: certName 里列出全部总承包/专业承包资质及等级；逐项过滤用 property building
+        # default_fields 取证书名/编号/类别及等级/资质等级/到期/状态 —— 实测中建八局这里返回的是对外承包工程经营资格，和建筑业资质是两张表
+        - category: 建筑
+          label: 建筑工程资质
+          path: /openapi/enterprise/building_engineering
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, kindLevel, qualificationLevel, validEnd, state]
+        # default_fields 取证书名/编号/能力等级/到期/状态
+        - category: 专项
+          label: 安防工程企业资质
+          path: /openapi/enterprise/security_engineering_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, level, validEnd, state]
+        # default_fields 取证书名/许可证号/许可类别/许可内容/到期/状态 —— 承装修试电力设施许可，电力工程供应商硬门槛
+        - category: 专项
+          label: 承装（修、试）电力设施许可证
+          path: /openapi/enterprise/electric_license_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, licenceType, content, validEnd, state]
+        # default_fields 取证书名/编号/等级/到期/状态/发证机关
+        - category: 专项
+          label: 房地产开发企业资质
+          path: /openapi/estateQualification/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, level, validEnd, state, issueUnit]
+        # default_fields 取证书名/编号/资质等级/专业范围/到期/状态
+        - category: 专项
+          label: 测绘资质
+          path: /openapi/surveying/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, qualificationLevel, scope, validEnd, state]
+        # default_fields 取证书名/编号/许可范围/到期/状态/许可机关 —— 施工/矿山/危化品企业的法定前置许可
+        - category: 安全
+          label: 安全生产许可证
+          path: /openapi/productSafeLicense/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, permitScope, validEnd, state, permitAgency]
+
+  # —— 环保与资源：排污许可、辐射安全、危化品经营、非煤矿山、探矿/采矿权、林业许可 ——
+  - noun: ip
+    verb: env
+    summary: 环保与资源类许可（排污许可证/辐射安全/危化品经营/非煤矿山安全生产/探矿权/采矿权/林业许可），--only 环保,危险品,矿业,林业
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书而非当前在册
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: certType
+      targets:
+        # default_fields 取证书名/编号/行业类别/主要污染物/到期/状态 —— 制造类供应商环保合规的核心凭证
+        - category: 环保
+          label: 排污许可证
+          path: /openapi/sewagePermit/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, industry, mainPollutants, validEnd, state]
+        # default_fields 取证书名/编号/种类范围/到期/状态/发证机关
+        - category: 环保
+          label: 辐射安全许可证
+          path: /openapi/enterprise/radiation_permission_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, scope, validEnd, state, issueUnit]
+        # default_fields 取证书名/编号/许可内容/到期/状态/发证机关
+        - category: 危险品
+          label: 危险化学品经营许可证
+          path: /openapi/hazardousChemicalsLicence/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, content, validEnd, state, department]
+        # default_fields 取证书名/编号/许可范围/开采方式/到期/状态
+        - category: 矿业
+          label: 非煤矿山安全生产许可
+          path: /openapi/nonCoalMine/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, licenseScope, miningMethod, validEnd, state]
+        # default_fields 取许可证号/项目名/勘查矿种/面积/到期/状态
+        - category: 矿业
+          label: 探矿权
+          path: /openapi/miningExploration/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [registerNo, projectName, surveyMineral, area, validEnd, state]
+        # default_fields 取许可证号/矿山名/主矿种/生产规模/到期/状态
+        - category: 矿业
+          label: 采矿权
+          path: /openapi/miningLicense/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [registerNo, mineName, mineKind, mineScale, validEnd, state]
+        # default_fields 取证书名/编号/许可项目/起止/状态
+        - category: 林业
+          label: 林业局许可
+          path: /openapi/forestryPermit/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, permitProject, validStart, validEnd, state]
+
+  # —— 医药医疗：药品 / 医疗器械 / 化妆品 / 卫生，18 个端点 ——
+  - noun: ip
+    verb: medical
+    summary: 医药医疗类许可（药品生产经营与批文/GMP-GSP/医疗器械生产经营注册/化妆品/卫生许可/医药广告），--only 药品,器械,化妆品,卫生
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书而非当前在册
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: certType
+      targets:
+        # default_fields 取证书名/编号/生产范围/到期/状态/发证机关 —— 药品生产许可证
+        - category: 药品
+          label: 药品生产企业
+          path: /openapi/drugProduce/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productionScope, validEnd, state, issueUnit]
+        # default_fields 取证书名/编号/经营方式(批发/零售)/经营范围/到期/状态 —— 药品经营许可证
+        - category: 药品
+          label: 药品经营企业
+          path: /openapi/drugBusiness/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, businessType, businessScope, validEnd, state]
+        # default_fields 取产品名/批准文号/剂型/规格/到期/状态 —— 一行一个品种
+        - category: 药品
+          label: 国产药品批准文号
+          path: /openapi/drugPermitCn/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [productName, registerNo, medicineType, model, validEnd, state]
+        # default_fields 取药品名/批准文号/备案内容/备案日/状态
+        - category: 药品
+          label: 境内外生产药品备案
+          path: /openapi/drugRecord/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [drugName, approvalNumber, recordContent, recordDate, state]
+        # default_fields 取证书名/编号/认证范围/到期/状态/发证机构 —— GMP/GSP
+        - category: 药品
+          label: GMP/GSP 认证
+          path: /openapi/licenseDrug/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, certifScope, validEnd, state, issueUnit]
+        # default_fields 取证书名/编号/服务性质/网站/到期/状态
+        - category: 药品
+          label: 互联网药品信息服务
+          path: /openapi/internetDrug/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, serviceKind, website, validEnd, state]
+        # default_fields 取证书名/编号/配制范围/到期/状态/发证机关 —— 医疗机构制剂室
+        - category: 药品
+          label: 医疗机构制剂许可证
+          path: /openapi/enterprise/medical_preparation_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, scope, validEnd, state, issueUnit]
+        # default_fields 取颗粒名/备案号/备案状态/备案省局/日期/状态
+        - category: 药品
+          label: 中药配方颗粒备案
+          path: /openapi/chineseMedicineRecord/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [granuleName, registerNo, recordState, recordGranule, validStart, state]
+        # default_fields 取药品名/备案号/备案状态/日期/状态
+        - category: 药品
+          label: 中药提取物备案
+          path: /openapi/medicineExtract/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [drugName, registerNo, recordState, validStart, state]
+        # 医药类广告资质（t-medical-advertising）未收录：文档路径 /openapi/medicalAdvertising/list
+        # 实测 1601013「接口不存在」，medicalAdvertisement/list、enterprise/medical_advertising(_list)
+        # 等变体也都不存在。留在扇出里会让每次 ip medical 都以 exit 6 结束，故注释掉；
+        # 平台上线后取消注释即可：
+        #   - category: 药品
+        #     label: 医药类广告审查
+        #     path: /openapi/medicalAdvertising/list
+        #     list: data.list
+        #     params: { creditCode: socialCreditCode, isHistory: history }
+        #     default_fields: [licenseName, registerNo, commodityName, advertisingKind, validEnd, state]
+        # default_fields 取证书名/编号/生产范围/到期/状态/发证机关 —— 医疗器械生产许可/备案
+        - category: 器械
+          label: 医疗器械生产企业
+          path: /openapi/medicalInstrumentsProduce/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, scope, validEnd, state, department]
+        # default_fields 取证书名/编号/经营方式/经营范围(2017 分类)/到期/状态
+        - category: 器械
+          label: 医疗器械经营企业
+          path: /openapi/medicalInstrumentsBusiness/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, businessType, scope2017, validEnd, state]
+        # default_fields 取产品名/注册证号/管理类别(I/II/III 类)/型号/到期/状态 —— 一行一个注册证
+        - category: 器械
+          label: 国产医疗器械注册
+          path: /openapi/medicalInstrumentsRegistered/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [name, registerNo, manageType, model, validEnd, state]
+        # default_fields 取产品名(中文)/注册证号/管理类别/生产国/到期/状态
+        - category: 器械
+          label: 进口医疗器械注册
+          path: /openapi/medicalInstrumentsImport/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [nameCn, registerNo, manageType, countryCn, validEnd, state]
+        # default_fields 取证书名/编号/许可项目/到期/状态/发证机关
+        - category: 化妆品
+          label: 化妆品生产许可
+          path: /openapi/cosmeticProduceLicense/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, permitItem, validEnd, state, issueUnit]
+        # default_fields 取产品名/备案号/生产企业/备案日/状态
+        - category: 化妆品
+          label: 非特殊用途化妆品备案
+          path: /openapi/cosmeticNonspecial/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [productName, registerNo, productCompany, validStart, state]
+        # default_fields 取产品名/批件号/类别/批件有效期/状态
+        - category: 化妆品
+          label: 特殊化妆品备案
+          path: /openapi/cosmeticSpecial/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [productNameCn, registerNo, kind, valid, state]
+        # default_fields 取证书名/编号/类别/产品名/到期/状态 —— 消毒产品、涉水产品等卫生许可
+        - category: 卫生
+          label: 卫生行政许可证
+          path: /openapi/hygieneProduct/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, kind, productName, validEnd, state]
+
+  # —— 食品：生产许可 / 经营许可 / 添加剂 / 农产品认证 / 出口备案 ——
+  - noun: ip
+    verb: food
+    summary: 食品类许可（食品生产许可证 SC/食品经营许可证/食品添加剂生产许可/食品农产品认证/出口食品生产企业备案），--only 生产,经营,认证
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书而非当前在册
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: certType
+      targets:
+        # default_fields 取证书名/许可证编号/食品类别/到期/状态/发证机关 —— SC 证是食品供应商准入硬门槛
+        # 文档只有 food_product_license_list / _history；base 路径已实调存在
+        - category: 生产
+          label: 食品生产许可证
+          path: /openapi/enterprise/food_product_license
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, proType, validEnd, state, department]
+        # default_fields 取证书名/编号/产品类别/到期/状态/发证机关
+        # 文档只有 food_additives_list / _history；base 路径已实调存在
+        - category: 生产
+          label: 食品添加剂生产许可证
+          path: /openapi/enterprise/food_additives
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, product, validEnd, state, issueUnit]
+        # default_fields 取证书名/编号/主体业态/经营项目/到期/状态
+        - category: 经营
+          label: 食品经营许可证
+          path: /openapi/enterprise/food_business_license_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, identity, operationItem, validEnd, state]
+        # default_fields 取证书名/编号/认证项目/产品名/到期/状态 —— 有机/绿色/GAP 等认证
+        - category: 认证
+          label: 食品农产品认证
+          path: /openapi/foodLicense/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, renzhengItem, productName, validEnd, state]
+        # default_fields 取证书名/备案号/产品名/国家地区/到期/状态
+        - category: 认证
+          label: 出口食品生产企业备案
+          path: /openapi/foodProductEnt/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, productName, country, validEnd, state]
+
+  # —— 其他行业经营许可：金融资质、代理记账、商务特许经营、民航、印刷、鼓励企业 ——
+  - noun: ip
+    verb: business
+    summary: 其他行业经营许可（金融行业资质/代理记账/商务特许经营/民航经营许可/印刷经营许可/鼓励企业证书），--only 金融,经营,荣誉
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史证书而非当前在册
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    fanout:
+      tag_category: category
+      tag_label: certType
+      targets:
+        # default_fields 取证书名/编号/机构类型/监管机构/到期/状态 —— 回答「是银行/保险/证券/支付哪一类、归谁管」
+        # 文档只有 financial_list / _history；base 路径已实调存在
+        - category: 金融
+          label: 金融行业资质
+          path: /openapi/enterprise/financial
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, institutionTypeFirst, regulatorFirst, validEnd, state]
+        # default_fields 取证书名/编号/起止/状态/地区
+        - category: 经营
+          label: 代理记账许可证
+          path: /openapi/enterprise/agency_bookkeep_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, validStart, validEnd, state, location]
+        # default_fields 取证书名/备案号/备案日/状态/境内加盟店
+        - category: 经营
+          label: 商务特许经营备案
+          path: /openapi/businessConcession/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, validStart, state, territoryStore]
+        # default_fields 取证书名/编号/经营范围/到期/状态
+        - category: 经营
+          label: 民航经营许可证
+          path: /openapi/civilaviationBusinessLicense/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, scope, validEnd, state]
+        # default_fields 取证书名/编号/到期/状态/地区
+        - category: 经营
+          label: 印刷经营许可证
+          path: /openapi/print/list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, validEnd, state, location]
+        # default_fields 取证书名/编号/到期/状态/颁发协会 —— 行业协会颁的鼓励类证书，荣誉性质
+        - category: 荣誉
+          label: 鼓励企业证书
+          path: /openapi/enterprise/encourage_enterprise_list
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [licenseName, registerNo, validEnd, state, association]
