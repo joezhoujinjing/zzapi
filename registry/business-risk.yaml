@@ -1,0 +1,536 @@
+# 经营风险（bizrisk）—— enterprise-business-risk 模块的单项明细查询
+#
+# 与 `enterprise risk` 的分工：
+#   enterprise risk <企业>   31 项并发体检，只列命中、不翻页 —— 回答「有没有问题」
+#   bizrisk <项> <企业>      单一主题的完整明细，可翻页、可查历史、可按状态筛 —— 回答
+#                           「具体是什么、多少钱、哪年、现在解除没有」
+#   典型用法：先 enterprise risk 看命中了哪几项，再用 bizrisk 对命中的项追明细。
+#
+# 路径约定（沿用 enterprise.yaml 里对本模块的实测结论，见 commit 1d4408c）：
+#   平台对每个主题开了 <主题> / <主题>_list / <主题>_history 三个接口，实测
+#   base = 全集、_list ≡ isHistory:0、_history ≡ isHistory:1，且 base 返回
+#   {list, totalCount} 分页结构。所以这里一律用 base 路径，_list/_history 成对
+#   折叠成一条命令，`--history` 开关翻到历史（已移出/已失效/已解除）。
+#   # TODO 待实调验证：分页（pageNum/pageSize）与各主题的状态筛选参数是按 _list
+#   #      文档透传给 base 的；体检扇出只验证过 creditCode + isHistory 两个参数。
+#
+# 入参约定：和 enterprise risk / cert 一样，用户给信用代码或企业精确全名均可，
+#   先经 wy-enterprise 归一化，坐标同时带上 socialCreditCode 与 companyName。
+#
+# 已被 enterprise.yaml 覆盖、此处不重复声明的同模块接口：
+#   clear_account（清算组备案）、emptyshell_risk（空壳指数）、logoutannouncement（注销公告）
+
+module: business-risk
+
+endpoints:
+  # ══════════════════ 工商 ══════════════════
+
+  # default_fields 取列入原因/列入日期/列入机关/移出日期/移出原因 —— 尽调关心「为什么进、
+  # 什么时候进、出来了没有」；省份与注册号是坐标已有的冗余，去掉
+  - noun: bizrisk
+    verb: abnormal
+    path: /openapi/enterprise/abnormal
+    summary: 经营异常名录明细（列入/移出原因、机关、日期）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录（已移出）而非当前在册
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: &resolve-enterprise
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send: &send-paged
+      creditCode: socialCreditCode
+      isHistory: history
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [inReason, inDate, department, outDate, outReason]
+      meta: [totalCount]
+
+  # default_fields 取违法类别/列入原因/列入日期/列入机关/移出日期 —— 黑名单看「哪类、为何、
+  # 多久前、是否已移出」；executedPerson/majorTaxViolatio 是嵌套对象，--full 再看
+  - noun: bizrisk
+    verb: illegal
+    path: /openapi/enterprise/serious_illegal
+    summary: 严重违法失信名单（工商黑名单）明细；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录（已移出）而非当前在册
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [illType, inReason, inDate, inDepartment, outDate]
+      meta: [totalCount]
+
+  # ══════════════════ 处罚 ══════════════════
+
+  # default_fields 取处罚文号/违法类型/处罚结果/罚款金额/处罚机关/决定日期 —— 处罚看
+  # 「因为什么、罚了多少、谁罚的、多久前」；文号用于引用与去重。该接口 40+ 字段，
+  # pdf 正文、救济渠道、各类细分没收金额一律进 --full
+  - noun: bizrisk
+    verb: penalty
+    path: /openapi/enterprise/administrative_punishment
+    summary: 行政处罚明细（类型、结果、罚款金额、机关、日期）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录而非当前有效
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [number, illegalType, content, punishAmount, department, date]
+      meta: [totalCount]
+
+  # default_fields 取文书号/违法类型/处罚类型/处罚结果/处罚机关/处罚日期 —— 与行政处罚
+  # 同一套「事由/结果/机关/日期」；环保处罚没有独立金额字段，金额在 punishmentResult 文本里
+  - noun: bizrisk
+    verb: env-penalty
+    path: /openapi/enterprise/huanbaochufas
+    summary: 环保处罚明细（违法类型、处罚结果、机关、日期）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录而非当前有效
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [documentNo, illegalType, punishmentType, punishmentResult, punishmentDept, punishmentDate]
+      meta: [totalCount]
+
+  # ══════════════════ 税务 ══════════════════
+
+  # default_fields 取认定原因/纳税人状态/欠税税种/欠税金额/认定单位/认定日期 —— 非正常户
+  # 的核心是「为何被认定、欠了多少、哪个税局、多久前」；认定单位电话/地址/证件种类去掉
+  - noun: bizrisk
+    verb: tax-abnormal
+    path: /openapi/enterprise/abnormal_enterprises
+    summary: 税务非正常户明细（认定原因、欠税金额、认定单位、日期）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录（已解除）而非当前在册
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [reason, state, overdueType, overdueAmount, judgeDepartment, judgeDate]
+      meta: [totalCount]
+
+  # default_fields 取案件性质/违法事实/法律依据及处罚/检查机关/发生时间 —— 重大税收违法
+  # 是定性项，「什么性质、做了什么、罚了什么、谁查的、哪年」即可；各类责任人信息去掉
+  - noun: bizrisk
+    verb: tax-violation
+    path: /openapi/enterprise/huge_tax_punishment
+    summary: 重大税收违法明细（案件性质、违法事实、处罚、检查机关）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录而非当前公示
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [caseType, truth, lawPunishment, checkDepartment, time]
+      meta: [totalCount]
+
+  # default_fields 取欠税税种/欠税余额/本年新欠/公布机关/发生时间/公布时间 —— 欠税看
+  # 「欠哪种、总共多少、是否还在新增、哪个税局、多久前」；纳税人类型/登记类型等去掉
+  - noun: bizrisk
+    verb: tax-arrears
+    path: /openapi/enterprise/overduetaxs
+    summary: 欠税公告明细（税种、欠税余额、本年新欠、机关、时间）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录而非当前公告
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [overdueType, overdueAmount, currOverdueAmount, pubDepartment, overdueTime, pubDate]
+      meta: [totalCount]
+
+  # ══════════════════ 司法 ══════════════════
+
+  # default_fields 取被执行人/股权数额/状态/执行法院/冻结起止 —— 先看 beExecutedPerson 是不是
+  # 本企业（可能是母公司），再看 status 是否已解除、冻了多少、冻到几时；30 个 detail* 字段进 --full
+  - noun: bizrisk
+    verb: equity-freeze
+    path: /openapi/enterprise/judicial_freezes
+    summary: 股权冻结明细（被执行人、数额、状态、法院、冻结期限）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录（已解除/失效）而非当前有效
+      statusCode:
+        type: int
+        flag: status
+        desc: 状态码筛选 1 冻结 2 股权变更 3 失效 4 解除冻结 5 续冻 6 完全冻结 7 一般冻结 8 有效 -1 其他
+      typeCode:
+        type: int
+        flag: type
+        desc: 类型码筛选 1 股权变更 2 股权冻结 -1 其他
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      statusCode: statusCode
+      typeCode: typeCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [beExecutedPerson, amount, status, executiveCourt, detailFreezeStartDate, detailFreezeEndDate]
+      meta: [totalCount]
+
+  # default_fields 取被执行人/终本案号/执行法院/终本日期/执行标的/未履行金额 —— 终本 = 查无
+  # 可供执行财产，「欠谁的、欠多少、没还多少、哪年」是偿付能力的直接证据；先确认 name 是本企业
+  - noun: bizrisk
+    verb: terminated-case
+    path: /openapi/enterprise/terminationcaseitem
+    summary: 终本案件明细（案号、法院、标的、未履行金额、终本日期）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录而非当前
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [name, caseNoTerminal, court, terminateDate, amount, failPerformAmount]
+      meta: [totalCount]
+
+  # ══════════════════ 担保（自愿融资担保，不必然是负面，但要看主体） ══════════════════
+
+  # default_fields 取出质人/质权人/标的方/出质数额/状态/登记日期 —— 关键是「谁把谁的股权质给了
+  # 谁、多少、还有效吗、多久前」；本企业若是 pawnee 则是债权人不是风险。数额单位在 --full
+  - noun: bizrisk
+    verb: equity-pledge
+    path: /openapi/enterprise/equityquality
+    summary: 股权出质明细（出质人、质权人、标的方、数额、状态、日期）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录（已注销/撤销）而非当前有效
+      role:
+        type: int
+        desc: 本企业角色筛选 1 质权人 2 出质人 3 标的方
+      statusCode:
+        type: int
+        flag: status
+        desc: 状态码筛选 1 正常或有效 2 部分撤销 3 撤销或全部撤销 4 无效 5 注销 -1 其他
+      publicDateStart:
+        flag: since
+        desc: 公示日期下限，如 2022-01-01
+      publicDateEnd:
+        flag: until
+        desc: 公示日期上限
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      role: role
+      statusCode: statusCode
+      publicDateStart: publicDateStart
+      publicDateEnd: publicDateEnd
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [pledgor, pawnee, objectCompany, pledgorAmount, status, date]
+      meta: [totalCount]
+
+  # default_fields 取名称/种类/出质人/质权人/登记期限/状态 —— 「拿什么知产（商标/专利）质押
+  # 给谁、期限到几时、还有效吗」；本企业若是 pledgor 说明以知产质押融资
+  - noun: bizrisk
+    verb: ip-pledge
+    path: /openapi/enterprise/knowledge_properties
+    summary: 知识产权出质明细（名称、种类、出质人、质权人、期限、状态）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录而非当前有效
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send: *send-paged
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [name, type, pledgor, pawnee, period, status]
+      meta: [totalCount]
+
+  # default_fields 取被担保债权数额/债权种类/状态/抵押权人/登记机关/登记日期 —— 「抵了多少、
+  # 抵给谁、还有效吗、多久前」；mortgagees 是抵押权人数组，本企业若在其中则是债权人
+  - noun: bizrisk
+    verb: mortgage
+    path: /openapi/enterprise/mortgages
+    summary: 动产抵押明细（债权数额、状态、抵押权人、登记机关、日期）；总览用 enterprise risk
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+      history:
+        type: bool
+        default: false
+        desc: 查历史记录（已注销/无效）而非当前有效
+      statusCode:
+        type: int
+        flag: status
+        desc: 状态码筛选 1 有效 2 变更 3 新登记 6 注销 7 无效 -1 其他
+      pageNum:
+        type: int
+        flag: page
+        default: 1
+        min: 1
+        desc: 页码
+      pageSize:
+        type: int
+        flag: limit
+        default: 20
+        min: 1
+        max: 20
+        desc: 每页条数（平台上限 20）
+    resolve: *resolve-enterprise
+    send:
+      creditCode: socialCreditCode
+      isHistory: history
+      statusCode: statusCode
+      pageNum: pageNum
+      pageSize: pageSize
+    result:
+      list: data.list
+      coordinate: [socialCreditCode, companyName, target]
+      default_fields: [amount, type, status, mortgagees, department, date]
+      meta: [totalCount]
