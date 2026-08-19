@@ -1,9 +1,9 @@
 # 司法风险（judicial）—— 案件明细：在打什么官司、涉案多少钱、被执行多少、有没有破产
 #
-# 现有 enterprise risk 的 31 项扇出是「在不在黑名单」的布尔判定；这组补的是明细与金额。
+# 「有没有」看 enterprise risk（38 项扇出里含本模块 7 个稀疏强信号：被执行 / 失信 / 限高 /
+# 破产 / 司法拍卖 / 询价评估 / 违建）；「具体什么案子、多少钱、本企业什么角色」看这里的明细。
+# 体检 vs 明细互补，与 bizrisk 同一模式。不再单设 judicial check 体检入口——与 enterprise risk 重复。
 #
-#   judicial check        <企业>  扇出体检：被执行 / 失信 / 限高 / 破产 / 司法拍卖 / 询价评估 / 违法建设，
-#                                 默认只列命中；立案/开庭/文书/公告的条数进 meta
 #   judicial executed     <企业>  被执行人（执行标的金额 / 执行状态）        --history
 #   judicial dishonest    <企业>  失信被执行人（标的 / 履行情况）            --history
 #   judicial restricted   <企业>  限制高消费（被限制人 / 申请执行人 / 案由）  --history
@@ -27,18 +27,19 @@
 #   --history 默认关 → 只看当前在册。开庭/文书/公告三个 base（kaitinggonggaos /
 #   lawsuits_rolerelations / notices）本次也已实调确认存在且接受 isHistory。
 #
-# 量级（同分支 8 家样本合计）：被执行 74 · 违法建设 14 · 司法拍卖 10 · 失信/限高/破产/询价 0
-#   —— 稀疏，命中即有意义，进 check 扇出；
+# 量级（8 家样本合计）：被执行 74 · 违法建设 14 · 司法拍卖 10 · 失信/限高/破产/询价 0
+#   —— 稀疏，命中即有意义，已进 enterprise risk 扇出；
 #   开庭 646 · 立案 473 · 文书 339 · 公告 53 —— 家家都有、动辄上百，是常态数据不是风险命中，
-#   塞进「只列命中」的扇出会淹没真信号，所以只以条数进 check 的 meta，明细走各自的命令。
+#   不进任何体检扇出，只走这里的明细命令（meta.totalCount 给条数）。
 #   这四类都带 role/pureRole/cleanRole（原告 / 被告 / 申请人 …）：当原告不是风险，
 #   默认字段一定带角色，免得把主动维权的公司当成高风险。
 #
 # 返回形状（实测 2026-08-20，样本恒大地产集团）：12 个分页接口都是
 # {list, totalCount, pageNum, pageSize, dataCnt}（list: data.list，meta 取 totalCount）；
 # lawsuits_case_cause 例外，是裸数组 data。恒大：被执行 350 / 文书 2987 / 公告 314 / 询价 19 / 违建 1 / 破产 0。
-# pageSize 平台上限 20，设 max 拦下。时间范围参数（dateType/caseDateType/filingDateType/
-# hearingDateType/startDateType）语义相同，CLI 统一叫 --recent 1|2|3（最近 6 个月 / 1 年 / 2 年）。
+# pageSize 平台上限 20，设 max 拦下；默认 5 条——meta.totalCount 已给总数，要更多用 --limit/--page。
+# 时间范围参数（dateType/caseDateType/filingDateType/hearingDateType/startDateType）
+# 语义相同，CLI 统一叫 --recent 1|2|3（最近 6 个月 / 1 年 / 2 年）。
 #
 # 案由码表的取舍：lawsuits_case_cause / restricted_case_reason 都要 creditCode，返回的是
 # 「这家企业」的案由去重列表，是按企业聚合的事实数据而不是全局码表，做不成 ref 那样的本地表。
@@ -50,110 +51,6 @@
 module: enterprise-judicial-risk
 
 endpoints:
-  # ——————————————————————————————————————————————————————————
-  # 司法体检扇出：一次查完稀疏强信号，按来源打标；常态数据只给计数
-  - noun: judicial
-    verb: check
-    summary: 司法体检——并发查被执行/失信/限高/破产/拍卖/询价/违建，默认只列命中；立案等条数进 meta
-    params:
-      target:
-        required: true
-        positional: true
-        multi: true
-        desc: 统一社会信用代码，或企业全名（必须精确）
-      history:
-        type: bool
-        default: false
-        desc: 查历史数据而非当前在册（被执行/失信/限高三项支持）
-    resolve:
-      path: /openapi/enterprise/wy-enterprise
-      try_params:
-        - { creditCode: target }
-        - { companyName: target }
-      list: data
-      bind:
-        creditCode: creditCode
-        companyName: companyName
-      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
-    fanout:
-      tag_category: category
-      tag_label: riskType
-      # 常态数据：不进 items，只把 totalCount 并入 meta 当诉讼活跃度背景。
-      # 不传 isHistory → base 全集（当前 + 历史）的总条数。
-      context:
-        - path: /openapi/enterprise/cases
-          params: { creditCode: creditCode }
-          item: data
-          as: { totalCount: caseCount }
-        - path: /openapi/enterprise/kaitinggonggaos
-          params: { creditCode: creditCode }
-          item: data
-          as: { totalCount: hearingCount }
-        - path: /openapi/enterprise/lawsuits_rolerelations
-          params: { creditCode: creditCode }
-          item: data
-          as: { totalCount: judgmentCount }
-        - path: /openapi/enterprise/notices
-          params: { creditCode: creditCode }
-          item: data
-          as: { totalCount: noticeCount }
-      targets:
-        # —— 执行 ——
-        - category: 执行
-          label: 被执行人
-          path: /openapi/enterprise/executedpersons
-          list: data.list
-          params: { creditCode: creditCode, isHistory: history }
-          default_fields: [name, caseNumber, court, amount, caseDate, status]
-          note: 被执行 ≠ 失信；有执行案件不等于拒不履行。先看 name 是否本企业，再看 status 是否已结案
-        - category: 执行
-          label: 失信被执行人
-          path: /openapi/enterprise/executions
-          list: data.list
-          params: { creditCode: creditCode, isHistory: history }
-          default_fields: [name, caseNumber, court, amount, date, executionStatus]
-          note: 与 enterprise risk 的「失信被执行人」是同一事项的另一条管线（本条带标的金额），可能同时命中
-        - category: 执行
-          label: 限制高消费
-          path: /openapi/enterprise/restricted_consumer
-          list: data.list
-          params: { creditCode: creditCode, isHistory: history }
-          default_fields: [name, caseNo, court, caseReason, filingDate, executionApplicant]
-          note: name 是被限制的自然人（通常是法定代表人），companyName 是其关联企业
-
-        # —— 存续 ——
-        - category: 存续
-          label: 破产/强制清算
-          path: /openapi/enterprise/t_bankruptcy_new
-          list: data.list
-          params: { creditCode: creditCode }
-          default_fields: [caseNo, court, name, appName, caseKind, pubDate]
-          note: 先看 name（被申请人）是不是本企业——本企业也可能是申请人（debtorName 是债务人）。命中且为被申请人，准入通常硬否决
-
-        # —— 处置 ——
-        - category: 处置
-          label: 司法拍卖
-          path: /openapi/enterprise/auctions_relations
-          list: data.list
-          params: { creditCode: creditCode }
-          default_fields: [role, name, court, date, startPrice, transactionPrice]
-          note: 看 role / owner——本企业可能是拍品所有人（资产被处置），也可能只是关联方
-        - category: 处置
-          label: 询价评估
-          path: /openapi/enterprise/t_inquiry_evaluation
-          list: data.list
-          params: { creditCode: creditCode }
-          default_fields: [caseNo, courtName, subjectMatter, propertyKind, result, pubDate]
-          note: 执行程序中对财产的询价/评估，意味着已进入财产处置阶段
-
-        # —— 违建 ——
-        - category: 违建
-          label: 违法违规建设
-          path: /openapi/enterprise/t_illegal_construction
-          list: data.list
-          params: { creditCode: creditCode }
-          default_fields: [accountUnit, entryName, existQuestion, cleanAction, executionOriginal, quasiCompleteTimeLimit]
-
   # ——————————————————————————————————————————————————————————
   # 被执行人（executedpersons_list / _history 折叠）
   # default_fields 取 被执行人/案号/法院/执行标的/立案时间/执行状态 —— 尽调关心

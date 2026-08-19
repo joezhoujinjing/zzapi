@@ -1,6 +1,6 @@
 # 工商信息（company）—— 「这家公司是谁」
 #
-# 来源：enterprise-baseinfo 分组 41 份 spec，折叠/取舍后 28 条命令，覆盖 30 个端点。
+# 来源：enterprise-baseinfo 分组 41 份 spec，折叠/取舍后 27 条命令，覆盖 29 个端点（企业档案 /enterprise 由 enterprise info 覆盖，见下）。
 # 未收录 11 个（个体户专表 ×10、结构化变更记录 ×1），理由见 tasks-out 简报。
 #
 # 命名规则（所有 verb 都是名词，不混动词）：
@@ -11,7 +11,7 @@
 #     （shareholders / people / investments / equity / contacts）
 #   - 本身只有历史轨迹、没有「当前」对应物的数据集 → `X-history` 名词
 #     （name-history / legal-rep-history / capital-history / address-history），
-#     当前值在 `company info` 里；给这类命令再加 --history 开关会变成永远必须打开的开关
+#     当前值在 `enterprise info` 里；给这类命令再加 --history 开关会变成永远必须打开的开关
 #   - 主体类型专表直接用类型名：foundation / lawfirm / social-org / public-institution / hk-company
 #
 # 入参约定（与 enterprise risk / cert 一致）：
@@ -37,38 +37,13 @@ endpoints:
   # 主体档案
   # ══════════════════════════════════════════════════════════════
 
-  # default_fields 取法人/注册资本/成立日期/状态/行业/地址 —— agent 最常问的「注册资本多少、
-  # 成立多久、法人是谁、还在不在经营」全在这里；名称/信用代码已在 coordinate，不重复。
-  # 经营范围（scope）是长文本，--full 再看。
-  - noun: company
-    verb: info
-    path: /openapi/enterprise/enterprise
-    summary: 企业工商档案（法人/注册资本/成立日期/经营状态/行业/地址，40 字段；--full 看全量）
-    params:
-      target:
-        required: true
-        positional: true
-        multi: true
-        desc: 统一社会信用代码，或企业全名（必须精确）
-    resolve:
-      path: /openapi/enterprise/wy-enterprise
-      try_params:
-        - { creditCode: target }
-        - { companyName: target }
-      list: data
-      bind:
-        creditCode: socialCreditCode
-        companyName: companyName
-      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
-    send:
-      creditCode: socialCreditCode
-    result:
-      item: data   # TODO 待实调验证：单对象按 data 取；若平台包一层数组需改 list: data
-      coordinate: [socialCreditCode, companyName, target]
-      default_fields: [operName, registCapi, startDate, status, industryName, address]
+  # 企业工商档案（/openapi/enterprise/enterprise）不在此收录：`enterprise info` 用的是 resolve 本来就要调的
+  # wy-enterprise 端点（不引入新端点），给出同一份档案，且多出关联失信/被执行计数。实测比亚迪两端点字段
+  # 对比：/enterprise 独有的 10 个字段（industryCode1-4 / industryName1-4 / canbaoNum / registCapiNew）全为 null，
+  # 其默认字段是 enterprise info 的子集——无可合并项。
 
-  # default_fields 与 info 同口径（法人/资本/日期/状态/类型/行业）—— 这是任意类型主体
-  # （含社会组织/事业单位/律所）都能查到的精简版；已是企业的优先用 info，字段更全。
+  # default_fields 与 enterprise info 同口径（法人/资本/日期/状态/类型/行业）—— 这是任意类型主体
+  # （含社会组织/事业单位/律所）都能查到的精简版；已是企业的优先用 enterprise info，字段更全。
   - noun: company
     verb: overview
     path: /openapi/enterprise/all_enterprise
@@ -499,7 +474,7 @@ endpoints:
   - noun: company
     verb: name-history
     path: /openapi/enterprise/history_names
-    summary: 曾用名（历史名称及变更时间）；当前名称看 company info
+    summary: 曾用名（历史名称及变更时间）；当前名称看 enterprise info
     params:
       target:
         required: true
@@ -544,7 +519,7 @@ endpoints:
   - noun: company
     verb: legal-rep-history
     path: /openapi/enterprise/history_oper_names
-    summary: 历任法定代表人及变更日期；当前法人看 company info
+    summary: 历任法定代表人及变更日期；当前法人看 enterprise info
     params:
       target:
         required: true
@@ -592,7 +567,7 @@ endpoints:
   - noun: company
     verb: capital-history
     path: /openapi/enterprise/history_regist_capis
-    summary: 注册资本变更历史（历次金额/币种/变更时间）；当前注册资本看 company info
+    summary: 注册资本变更历史（历次金额/币种/变更时间）；当前注册资本看 enterprise info
     params:
       target:
         required: true
@@ -638,7 +613,7 @@ endpoints:
   - noun: company
     verb: address-history
     path: /openapi/enterprise/migration_enterprise
-    summary: 注册地址迁移轨迹（迁移日期/迁出地/迁入地）；当前地址看 company info
+    summary: 注册地址迁移轨迹（迁移日期/迁出地/迁入地）；当前地址看 enterprise info
     params:
       target:
         required: true
@@ -1144,7 +1119,7 @@ endpoints:
   - noun: company
     verb: social-org-address
     path: /openapi/enterprise/address_other_list
-    summary: 社会组织地址（仅社会组织；企业地址看 company info / contacts）
+    summary: 社会组织地址（仅社会组织；企业地址看 enterprise info / company contacts）
     params:
       target:
         required: true
