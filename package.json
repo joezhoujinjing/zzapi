@@ -1,6 +1,6 @@
 {
   "name": "@joezhoujinjing/zzapi",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "中资（cneptp）寻源询价 OpenAPI 命令行客户端",
   "type": "module",
   "bin": {

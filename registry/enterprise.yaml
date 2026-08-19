@@ -95,6 +95,14 @@ endpoints:
           as:
             riskScore: shellRiskScore
             scoreLevel: shellRiskLevel
+        # 关联方风险计数：不是本企业的记录，38 项体检一条都看不到。
+        # 「本企业干净，但关联着 4 家失信企业」是准入判断的关键信息。
+        - path: /openapi/enterprise/wy-enterprise
+          params: { creditCode: socialCreditCode }
+          item: data
+          as:
+            relationPromiseNum: relatedDishonestCount
+            relationExecutorsNum: relatedExecutedCount
       targets:
         # —— 司法 ——
         - category: 司法
@@ -270,6 +278,54 @@ endpoints:
           default_fields: [name, court, caseNoTerminal, caseNoOrigin, filingDate, terminateDate, amount, failPerformAmount]
           note: 先看 name 是不是本企业（可能是关联公司）
 
+        # —— 司法（来自 enterprise-judicial-risk，只收稀疏强信号）——
+        # 开庭公告/案件/诉讼角色不在此列：实测 8 家合计 646/473/339 条，
+        # 家家都有、动辄上百，属常态数据而非风险命中，塞进「只列命中」的
+        # 扇出会把真信号淹没。它们走 enterprise lawsuit 的摘要视图。
+        - category: 司法
+          label: 被执行人
+          path: /openapi/enterprise/executedpersons
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [caseNumber, court, amount, caseDate, status]
+          note: 被执行人 ≠ 失信被执行人；有执行案件不等于拒不履行。先看 name 是否本企业
+        - category: 司法
+          label: 执行案件
+          path: /openapi/enterprise/executions
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [caseNumber, court, amount, caseDate, status]
+        - category: 司法
+          label: 限制高消费
+          path: /openapi/enterprise/restricted_consumer
+          list: data.list
+          params: { creditCode: socialCreditCode, isHistory: history }
+          default_fields: [caseNo, court, applicant, publishDate, restrictedPerson]
+        - category: 司法
+          label: 破产重整
+          path: /openapi/enterprise/t_bankruptcy_new
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [caseNo, court, applicant, respondent, publishDate, caseType]
+        - category: 司法
+          label: 司法拍卖
+          path: /openapi/enterprise/auctions_relations
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [title, court, startTime, endTime, initialPrice, status]
+        - category: 处罚
+          label: 违法建设
+          path: /openapi/enterprise/t_illegal_construction
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [projectName, illegalContent, punishResult, department, punishDate]
+        - category: 司法
+          label: 询价评估
+          path: /openapi/enterprise/t_inquiry_evaluation
+          list: data.list
+          params: { creditCode: socialCreditCode }
+          default_fields: [caseNo, court, targetName, evaluationResult, publishDate]
+
         # —— 担保（自愿融资担保，不必然是负面，但需看主体）——
         - category: 担保
           label: 股权出质
@@ -347,3 +403,37 @@ endpoints:
           map:
             "1": 已认证
             "0": 未认证
+
+  # ——————————————————————————————————————————————————————————
+  - noun: enterprise
+    verb: info
+    path: /openapi/enterprise/wy-enterprise
+    summary: 工商基本信息（含关联失信/被执行数）
+    params:
+      target:
+        required: true
+        positional: true
+        multi: true
+        desc: 统一社会信用代码，或企业全名（必须精确）
+    resolve:
+      path: /openapi/enterprise/wy-enterprise
+      try_params:
+        - { creditCode: target }
+        - { companyName: target }
+      list: data
+      bind:
+        creditCode: socialCreditCode
+        companyName: companyName
+      hint: 企业名必须是精确全名；用 zzapi enterprise search <关键词> 找到准确名称或信用代码
+    send:
+      creditCode: socialCreditCode
+    result:
+      # wy-enterprise 的 data 是单对象不是数组，用 item
+      item: data
+      coordinate: [socialCreditCode, companyName, target]
+      # relationPromiseNum/relationExecutorsNum 是关联方风险计数，
+      # 31 项体检看不到——它们不是本企业的记录，而是关联企业的
+      default_fields:
+        [companyName, creditCode, status, operName, title, econKind, registCapi, actualCapi,
+         startDate, checkDate, belongOrg, industryName, address, contactNumber, contactEmail,
+         relationPromiseNum, relationExecutorsNum, scope]
