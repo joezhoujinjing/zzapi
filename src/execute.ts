@@ -12,7 +12,7 @@ import {
   type Axis,
   type Outcome,
 } from './expand.js';
-import { localError, ZzError } from './errors.js';
+import { EXIT, localError, ZzError } from './errors.js';
 import { getResolver } from './resolvers/index.js';
 import type { Endpoint, ParamSpec, VariantSpec } from './registry.js';
 import { flagName } from './registry.js';
@@ -380,7 +380,11 @@ async function runResolve(
         return bound;
       }
     } catch (e) {
-      if (e instanceof ZzError) { lastErr = e; continue; }
+      // 只有「这个参数没查到企业」（exit 4）才值得换下一个 try_param 再试。
+      // 限频 / 鉴权 / 网络 / 未知平台错误换参数也不会好，而且包成 NOT_FOUND 会让
+      // 调用方以为是名字不对、换着名字反复重试——正好在限频时加大调用量。
+      // 这类错误原样向上抛，保留原始 code / exit / retryable / hint。
+      if (e instanceof ZzError && e.exitCode === EXIT.NOT_FOUND) { lastErr = e; continue; }
       throw e;
     }
   }
